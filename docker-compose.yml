@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  om1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openmindagi/om1:latest
+    container_name: om1
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=0
+      - CYCLONEDDS_HOME=/app/cyclonedds/install
+      - CYCLONEDDS_URI=file:///cyclonedds/cyclonedds.xml
+      - CMAKE_PREFIX_PATH=/app/cyclonedds/install
+      - OM_API_KEY=${OM_API_KEY}
+      - OM1_COMMAND=${OM1_COMMAND:-unitree_go2_modes}
+      - OM1_SKIP_INTERNET_CHECK=${OM1_SKIP_INTERNET_CHECK:-false}
+      - VIRTUAL_ENV=/app/OM1/.venv
+      - PATH=/app/OM1/.venv/bin:$PATH
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+      - PULSE_COOKIE=/root/.config/pulse/cookie
+      - ALSA_CARD=0
+    volumes:
+      - ./config:/app/OM1/config
+      - ./cyclonedds:/cyclonedds
+      - /dev/snd:/dev/snd:rw
+      - ${XDG_RUNTIME_DIR}/pulse:${XDG_RUNTIME_DIR}/pulse:rw
+      - ~/.config/pulse/cookie:/root/.config/pulse/cookie:ro
+      - ${HOME}/shared_data/locations:/app/OM1/locations:rw
+    devices:
+      - /dev/snd:/dev/snd
+      - /dev/video0:/dev/video0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    group_add:
+      - audio
+    command: ["${OM1_COMMAND:-unitree_go2_modes}"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:latest
+    build:
+      context: .
+      dockerfile: grafana/Dockerfile
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9091:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  grafana-data:
+  prometheus-data:
