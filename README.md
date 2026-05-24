@@ -35,11 +35,30 @@ Deferred (kept in repo as `[DEPRECATED]` only in spec; not implemented):
 
 ## Build & Run
 
+PC requirements:
+- Ubuntu 22.04
+- ROS 2 humble (for `rclpy` PC↔NX comm with the onboard's CycloneDDS network)
+- Python 3.12 (managed via `uv`)
+
 ```bash
+# system deps
 sudo apt-get update && sudo apt-get install -y portaudio19-dev python3-dev ffmpeg
+
+# ROS 2 humble (one-time)
+# follow https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+# then in every shell:
+source /opt/ros/humble/setup.bash
+export CYCLONEDDS_URI=file://$(pwd)/cyclonedds/cyclonedds.xml
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# python deps + run
 uv venv
 uv run src/run.py kist_g1_demo   # TBD mode config
 ```
+
+PC↔NX transport: **rclpy + CycloneDDS direct** (no Zenoh bridge daemon on the NX).
+PC and NX must share the same DDS domain and `cyclonedds.xml` network interface.
+OM1's internal Zenoh (mode manager, config provider) remains but stays loopback-only.
 
 `safety_monitor` / `motor_controller` run on the NX (see `kist-drl-g1-onboard`).
 

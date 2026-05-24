@@ -9,8 +9,17 @@ GUI / etc.) just poll data properties without touching DDS themselves.
 
 drawio C4 Container:
     Name        : UnitreeG1 Provider
-    Technology  : LAN / Python (Zenoh / CycloneDDS bridge)
+    Technology  : LAN / Python (rclpy + CycloneDDS, ROS 2 humble)
     Description : DDS subscriber + topic exposure consolidator.
+
+PC↔NX transport decision (vs Zenoh bridge):
+    rclpy + CycloneDDS direct over LAN (same DDS domain as NX). PC must
+    have ROS 2 humble installed and the matching cyclonedds.xml network
+    interface configured. zenoh-bridge-ros2dds daemon NOT deployed on
+    NX. Rationale: team familiarity with ROS 2, ros2 cli / ros2 bag /
+    rqt / rviz2 directly usable, fewer moving parts for a single-LAN
+    single-robot demo. OM1 framework's internal Zenoh usage (mode
+    manager, config provider) remains intact but stays loopback-only.
 
 ---
 
