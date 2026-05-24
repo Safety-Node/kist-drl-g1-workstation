@@ -42,7 +42,6 @@ dependencies = [
     "tf-keras==2.18.0",
     "faiss-cpu==1.13.2",
     "mcp==1.26.0",
-    "prometheus-client==0.25.0",
 ]
 
 [project.optional-dependencies]
