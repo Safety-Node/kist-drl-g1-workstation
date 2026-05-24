@@ -17,10 +17,10 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 
 | # | Component | Path | Notes |
 |---|---|---|---|
-| 1 | STT Provider | `src/providers/google_stt_provider.py` | Google Cloud STT |
-| 2 | TTS Provider | `src/providers/naver_clova_tts_provider.py` | Naver Clova |
-| 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS bridge → providers |
-| 4 | VLA Provider | `src/providers/vla_groot_provider.py` | GR00T N1.7 + GearSonic (placement TBD) |
+| 1 | STT Provider | `src/providers/stt_provider.py` (TBD) | Default backend: Google Cloud STT. Vendor reference: `src/providers/example/google_stt_provider.py` |
+| 2 | TTS Provider | `src/providers/tts_provider.py` (TBD) | Default backend: Naver Clova. Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
+| 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade via Zenoh bridge (TASK-41 scaffold) |
+| 4 | VLA Provider | `src/providers/vla_provider.py` (TBD) | GR00T N1.7 + GearSonic (placement TBD). Vendor reference: `src/providers/example/vla_groot_provider.py` |
 | 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
 | 6 | Move Connector | `src/actions/move/connector/g1_workstation.py` | Routes sub-task prompts to VLA |
 | 7 | Speak Connector | `src/actions/speak/connector/g1_workstation.py` | Text → TTS Provider |
