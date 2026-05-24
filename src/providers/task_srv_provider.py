@@ -105,7 +105,7 @@ the YAML schema. See ``SuccessKind`` below.
 | inbound   | Sound Sensor → on_audio(text, ts)         | STT transcript router         |
 | inbound   | UnitreeG1Provider.uwb_pose / .joint_state | success polling (TopicCache)  |
 | outbound  | MoveConnector.send(prompt)                | sub-task dispatch to VLA      |
-| outbound  | optional: IOProvider state for GUI BG     | active scenario / sub-task    |
+| read-only | .state / .active_sub_task properties      | polled by GUI BG (no callback)|
 
 ---
 
@@ -128,7 +128,7 @@ TODO(REQ-NEW-TASKSRV) [TASK-39]: tests under tests/providers/test_task_srv_provi
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .singleton import singleton
 
@@ -219,7 +219,6 @@ class TaskSrvProvider:
         self._unitree_g1 = None       # bound by bind()
         self._move_connector = None   # bound by bind()
         self._speak_connector = None  # bound by bind() (optional)
-        self._on_state_change: Optional[Callable[[TaskState], None]] = None
         self._running = False
         logging.info(
             "TaskSrvProvider: skeleton initialized (tick=%.1fHz, scenarios_dir=%s)",
@@ -304,7 +303,7 @@ class TaskSrvProvider:
         raise NotImplementedError("TaskSrvProvider.tick: TBD [TASK-39]")
 
     # ------------------------------------------------------------------
-    # Read-only state (for GUI BG)
+    # Read-only state (polled by GUI BG — no push callback)
     # ------------------------------------------------------------------
     @property
     def state(self) -> TaskState:
@@ -320,12 +319,10 @@ class TaskSrvProvider:
             return None
         return self._active_scenario.sub_tasks[self._active_sub_task_idx]
 
-    def register_state_callback(
-        self, callback: Callable[[TaskState], None]
-    ) -> None:
-        """Register a callback fired on every state transition (GUI hook)."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: invoke from _set_state() on each transition
-        self._on_state_change = callback
+    @property
+    def active_scenario_name(self) -> Optional[str]:
+        """Name of the currently running scenario, or None when IDLE."""
+        return self._active_scenario.name if self._active_scenario else None
 
     # ------------------------------------------------------------------
     # Internals

@@ -11,8 +11,9 @@ TODO(REQ-NEW-TASKSRV) [TASK-39]: tick() with stub UnitreeG1Provider that
                                   exposes UWB pose / joint_state TopicCaches;
                                   assert success advances index.
 TODO(REQ-NEW-TASKSRV) [TASK-39]: timeout path — freeze time, assert FAILED.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: state change callback fires on every
-                                  IDLE → ACTIVE / ACTIVE → SUCCESS / FAILED.
+TODO(REQ-NEW-TASKSRV) [TASK-39]: state property reflects each transition
+                                  (IDLE → ACTIVE → SUCCESS → IDLE etc.) —
+                                  polled by GUI BG, no push callback.
 """
 
 import pytest
@@ -89,15 +90,12 @@ def test_bind_speak_optional():
     assert p._speak_connector is None
 
 
-def test_register_state_callback():
+def test_idle_state_exposes_none_active():
+    """GUI BG polls these properties; verify IDLE state returns None for both."""
     p = TaskSrvProvider()
-    received = []
-
-    def _cb(state):
-        received.append(state)
-
-    p.register_state_callback(_cb)
-    assert p._on_state_change is _cb
+    assert p.state == TaskState.IDLE
+    assert p.active_sub_task is None
+    assert p.active_scenario_name is None
 
 
 def test_lifecycle_methods_are_stubs():
