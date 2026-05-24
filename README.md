@@ -18,7 +18,7 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 | # | Component | Path | Notes |
 |---|---|---|---|
 | 1 | STT Provider | `src/providers/stt_provider.py` (TBD) | Default backend: Google Cloud STT. Vendor reference: `src/providers/example/google_stt_provider.py` |
-| 2 | TTS Provider | `src/providers/tts_provider.py` (TBD) | Default backend: Naver Clova. Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
+| 2 | TTS Provider | `src/providers/tts_provider.py` | Default backend: Naver Clova (TASK-43 scaffold). Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
 | 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade via Zenoh bridge (TASK-41 scaffold) |
 | 4 | VLA Provider | `src/providers/vla_provider.py` (TBD) | GR00T N1.7 + GearSonic (placement TBD). Vendor reference: `src/providers/example/vla_groot_provider.py` |
 | 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` (TASK-39 scaffold) | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
