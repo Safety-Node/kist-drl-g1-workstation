@@ -8,9 +8,10 @@ the KIST demo (per CONV-004, KIST mail 2026-05-22, SYS-REQ
 
 The provider owns:
 
-1. A loaded **scenario script** (YAML or Python) — ordered list of
-   ``SubTask`` records, each with a natural-language prompt for the VLA
-   Provider and a ``SuccessCriterion`` to decide when the sub-task is done.
+1. A loaded **scenario script** (plain Python — see ``config/scenarios/``)
+   — ordered list of ``SubTask`` records, each with a natural-language
+   prompt for the VLA Provider and a ``SuccessCriterion`` to decide when
+   the sub-task is done.
 2. A **keyword router** — fed by Sound Sensor's ``on_audio(text, ts)``
    callback. A matched keyword triggers the corresponding scenario.
 3. The **dispatch path** to Move Connector (which formats the prompt into
@@ -30,6 +31,18 @@ drawio C4 Container:
 
 ---
 
+## Why Python scenarios (not YAML)
+
+Scenarios are typed Python objects under ``config/scenarios/`` rather than
+YAML files. Trade-off accepted (2026-05-24): YAML parser + validator + ad-hoc
+schema (~80 LoC) replaced by Python imports + dataclasses (~0 LoC of parsing).
+Cost: non-coders cannot edit scenarios — acceptable since the only authors
+are the developers themselves. Benefit: full IDE / pyright autocomplete,
+static type checking, polymorphic ``SuccessCriterion.evaluate(state)``
+instead of string-keyed kind dispatch.
+
+---
+
 ## Data flow
 
     Sound Sensor (STT transcript)                       (TASK-46)
@@ -37,8 +50,8 @@ drawio C4 Container:
     TaskSrv Provider                                    (this class)
         ├─ keyword match → load scenario + queue sub-tasks
         ├─ dispatch current sub-task prompt
-        │       ↓ Move Connector.send(prompt)
-        │   Move Connector → VLA Provider                (TASK-???)
+        │       ↓ Move Connector.connect(MoveInput(action=prompt))
+        │   Move Connector → VLA Provider                (TASK-40)
         │
         └─ poll UnitreeG1Provider for success
                 ↑ uwb_pose (locomotion sub-tasks)
@@ -51,122 +64,124 @@ drawio C4 Container:
 ## Lifecycle (per CONV-001 Option D — explicit init in run.py)
 
     run.py:
-        unitree_g1 = UnitreeG1Provider(...).start()
-        vla = VLAProvider(...).start()                  # TBD
-        move_conn = MoveConnector(...).bind(vla=vla)    # TBD
-        task_srv = TaskSrvProvider(config=...)
+        unitree_g1 = UnitreeG1Provider(...); unitree_g1.start()
+        vla = VLAProvider(...); vla.start()
+        move_conn = MoveConnector(ActionConfig())
+        task_srv = TaskSrvProvider(TaskSrvConfig())
         task_srv.bind(unitree_g1=unitree_g1, move_connector=move_conn)
-        task_srv.start()                                # loads scenario script
-        # TaskSrvBg picks up the singleton via TaskSrvProvider() and calls .tick()
+        task_srv.start()                                # loads scenarios
 
 Sound Sensor (also created in run.py) wires its callback to
 ``task_srv.on_audio``.
-
----
-
-## Scenario script format (TBD — YAML candidate)
-
-    # scenarios/refrigerator_pickup.yaml
-    name: refrigerator_pickup
-    triggers:
-      - 양상추 꺼내줘
-      - 양상추 가져와
-    sub_tasks:
-      - prompt: "Walk to the refrigerator."
-        success:
-          kind: uwb_pose
-          target: { x: 1.5, y: 0.3, yaw: 0.0 }
-          tolerance: { xy: 0.15, yaw: 0.20 }
-          timeout_s: 30.0
-      - prompt: "Open the refrigerator door."
-        success:
-          kind: joint_state
-          target_joint: "left_gripper_finger_1"
-          target_pos: 0.85
-          tolerance: 0.05
-          timeout_s: 10.0
-      - prompt: "Grasp the lettuce."
-        success:
-          kind: composite
-          all:
-            - { kind: joint_state, target_joint: "right_gripper_finger_1", target_pos: 0.20, tolerance: 0.03 }
-            - { kind: uwb_pose, target: { x: 1.5, y: 0.3, yaw: 0.0 }, tolerance: { xy: 0.10, yaw: 0.15 } }
-          timeout_s: 8.0
-
-Final shape is TBD — codifying here so the scaffold's dataclasses match
-the YAML schema. See ``SuccessKind`` below.
-
----
-
-## ICD references
-
-| Direction | Topic / call                              | Note                          |
-|-----------|-------------------------------------------|-------------------------------|
-| inbound   | Sound Sensor → on_audio(text, ts)         | STT transcript router         |
-| inbound   | UnitreeG1Provider.uwb_pose / .joint_state | success polling (TopicCache)  |
-| outbound  | MoveConnector.send(prompt)                | sub-task dispatch to VLA      |
-| read-only | .state / .active_sub_task properties      | polled by GUI BG (no callback)|
-
----
-
-TODO(REQ-NEW-TASKSRV) [TASK-39]: scenario loader — YAML → ``Scenario`` list.
-                                  Validate against ``triggers`` uniqueness.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: on_audio keyword router — first-match wins;
-                                  ignore if a scenario is already active.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: dispatch — push current sub-task prompt to
-                                  Move Connector; record dispatch ts for timeout.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: tick() success poll — read UnitreeG1Provider
-                                  TopicCache, evaluate active sub-task criterion.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: timeout / abort — surface a TaskFailure event;
-                                  emit a Speak prompt ("실패했어요") via Speak Connector.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: state machine — IDLE → ACTIVE(scenario, idx)
-                                  → SUCCESS / FAILED → IDLE.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: tests under tests/providers/test_task_srv_provider.py
-                                  (stub UnitreeG1Provider TopicCache + stub MoveConnector).
 """
 
 import logging
+import math
+import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .singleton import singleton
 
 
-class SuccessKind(str, Enum):
-    """Type of success criterion evaluated against UnitreeG1Provider state."""
-
-    UWB_POSE = "uwb_pose"        # locomotion sub-task (pose tolerance)
-    JOINT_STATE = "joint_state"  # manipulation sub-task (joint pos tolerance)
-    COMPOSITE = "composite"      # all-of nested criteria
-    # MANUAL  = "manual"         # human ack via GUI — future
+# ---------------------------------------------------------------------------
+# Success criteria — polymorphic sealed sum
+# ---------------------------------------------------------------------------
 
 
-class TaskState(str, Enum):
-    """High-level state of the orchestrator."""
+class SuccessCriterion(ABC):
+    """
+    Base class for a sub-task success rule.
 
-    IDLE = "idle"
-    ACTIVE = "active"
-    SUCCESS = "success"   # transient — flips back to IDLE on next tick
-    FAILED = "failed"     # transient — flips back to IDLE on next tick
+    Concrete subclasses implement :meth:`evaluate` against the live
+    ``UnitreeG1Provider`` state caches. ``timeout_s`` is uniform across
+    all criteria and consumed by ``TaskSrvProvider.tick()``.
+    """
+
+    timeout_s: float
+
+    @abstractmethod
+    def evaluate(self, uwb_cache: Any, joint_cache: Any) -> bool:
+        """Return True if the sub-task is complete given the current state."""
+        raise NotImplementedError
 
 
 @dataclass
-class SuccessCriterion:
+class UwbPoseSuccess(SuccessCriterion):
     """
-    One success rule. Exact field set depends on ``kind``; unused fields
-    stay at default. Concrete validation lives in the scenario loader
-    (TBD), this dataclass is a transport shape.
+    Locomotion sub-task success: robot UWB pose is within L2 ``tolerance_xy``
+    of ``target`` ``(x, y)`` and within ``tolerance_yaw`` of ``target_yaw``.
+
+    Note: yaw tolerance is ignored if NX's UWB driver does not produce yaw
+    (kp_angular=0 path). Set ``tolerance_yaw`` to a large value or
+    ``math.inf`` to disable.
     """
 
-    kind: SuccessKind
-    target: Optional[Dict[str, float]] = None        # UWB_POSE: {x, y, yaw}
-    tolerance: Optional[Dict[str, float]] = None     # UWB_POSE: {xy, yaw}
-    target_joint: Optional[str] = None               # JOINT_STATE
-    target_pos: Optional[float] = None               # JOINT_STATE (rad)
-    joint_tolerance: Optional[float] = None          # JOINT_STATE (rad)
-    children: List["SuccessCriterion"] = field(default_factory=list)  # COMPOSITE
+    target: Tuple[float, float, float]   # (x, y, yaw_rad)
+    tolerance_xy: float = 0.15
+    tolerance_yaw: float = 0.20
     timeout_s: float = 30.0
+
+    def evaluate(self, uwb_cache: Any, joint_cache: Any) -> bool:
+        """L2 xy + abs yaw vs target, both within tolerances."""
+        pose = getattr(uwb_cache, "value", None)
+        if pose is None:
+            return False
+        x = _get(pose, "x")
+        y = _get(pose, "y")
+        yaw = _get(pose, "yaw")
+        if x is None or y is None:
+            return False
+        tx, ty, tyaw = self.target
+        dxy = math.hypot(x - tx, y - ty)
+        if dxy > self.tolerance_xy:
+            return False
+        if yaw is not None and not math.isinf(self.tolerance_yaw):
+            if abs(_wrap_pi(yaw - tyaw)) > self.tolerance_yaw:
+                return False
+        return True
+
+
+@dataclass
+class JointStateSuccess(SuccessCriterion):
+    """
+    Manipulation sub-task success: a single joint reaches a target position.
+
+    For multi-joint criteria, compose via :class:`CompositeSuccess`.
+    """
+
+    target_joint: str
+    target_pos: float
+    tolerance: float = 0.05
+    timeout_s: float = 10.0
+
+    def evaluate(self, uwb_cache: Any, joint_cache: Any) -> bool:
+        """|actual - target| within tolerance."""
+        state = getattr(joint_cache, "value", None)
+        if state is None:
+            return False
+        actual = _joint_pos(state, self.target_joint)
+        if actual is None:
+            return False
+        return abs(actual - self.target_pos) <= self.tolerance
+
+
+@dataclass
+class CompositeSuccess(SuccessCriterion):
+    """All-of: succeeds when every child criterion evaluates True."""
+
+    children: List[SuccessCriterion] = field(default_factory=list)
+    timeout_s: float = 30.0
+
+    def evaluate(self, uwb_cache: Any, joint_cache: Any) -> bool:
+        return all(c.evaluate(uwb_cache, joint_cache) for c in self.children)
+
+
+# ---------------------------------------------------------------------------
+# Sub-task / scenario value objects
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -182,19 +197,33 @@ class Scenario:
     """One loaded scenario script."""
 
     name: str
-    triggers: List[str]              # STT keyword phrases
+    triggers: List[str]              # STT keyword phrases (substring match)
     sub_tasks: List[SubTask]
+
+
+# ---------------------------------------------------------------------------
+# Provider state machine
+# ---------------------------------------------------------------------------
+
+
+class TaskState(str, Enum):
+    """High-level state of the orchestrator."""
+
+    IDLE = "idle"
+    ACTIVE = "active"
+    SUCCESS = "success"   # transient — flips back to IDLE on next tick
+    FAILED = "failed"     # transient — flips back to IDLE on next tick
 
 
 @dataclass
 class TaskSrvConfig:
     """TaskSrv Provider runtime configuration."""
 
-    scenarios_dir: str = "scenarios/"   # YAML files live here (TBD)
-    tick_rate_hz: float = 10.0          # success-poll rate; TaskSrvBg target
+    tick_rate_hz: float = 10.0
     case_insensitive_keywords: bool = True
-    # Speak Connector hook for spoken status (e.g. "실패했어요"). Optional.
     enable_speak_feedback: bool = True
+    success_phrase: str = "성공했습니다."
+    failure_phrase: str = "실패했습니다."
 
 
 @singleton
@@ -211,19 +240,18 @@ class TaskSrvProvider:
     def __init__(self, config: Optional[TaskSrvConfig] = None):
         self._config = config or TaskSrvConfig()
         self._scenarios: List[Scenario] = []
-        self._trigger_index: Dict[str, Scenario] = {}   # built in start()
+        self._trigger_index: Dict[str, Scenario] = {}
         self._state: TaskState = TaskState.IDLE
         self._active_scenario: Optional[Scenario] = None
         self._active_sub_task_idx: int = -1
         self._sub_task_dispatch_ts: float = 0.0
-        self._unitree_g1 = None       # bound by bind()
-        self._move_connector = None   # bound by bind()
-        self._speak_connector = None  # bound by bind() (optional)
+        self._unitree_g1 = None
+        self._move_connector = None
+        self._speak_connector = None
         self._running = False
         logging.info(
-            "TaskSrvProvider: skeleton initialized (tick=%.1fHz, scenarios_dir=%s)",
+            "TaskSrvProvider: skeleton initialized (tick=%.1fHz)",
             self._config.tick_rate_hz,
-            self._config.scenarios_dir,
         )
 
     # ------------------------------------------------------------------
@@ -235,22 +263,7 @@ class TaskSrvProvider:
         move_connector: Any,
         speak_connector: Optional[Any] = None,
     ) -> None:
-        """
-        Wire dependencies from run.py.
-
-        Parameters
-        ----------
-        unitree_g1 : UnitreeG1Provider
-            Already-started singleton; read TopicCaches for success polling.
-        move_connector : MoveConnector
-            Already-bound connector; ``move_connector.send(prompt)`` pushes
-            a sub-task to the VLA Provider. (Exact API TBD on MoveConnector side.)
-        speak_connector : SpeakConnector, optional
-            Optional spoken feedback channel ("성공!"/"실패했어요"). If
-            ``enable_speak_feedback`` is True but this is None, feedback is
-            logged only.
-        """
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: assert all are started
+        """Wire dependencies from run.py before ``start()`` is called."""
         self._unitree_g1 = unitree_g1
         self._move_connector = move_connector
         self._speak_connector = speak_connector
@@ -258,49 +271,100 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-    def start(self) -> None:
-        """Load scenario scripts from disk, build the trigger index."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: scan scenarios_dir, parse YAML → Scenario list
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: build self._trigger_index (lower-case if configured)
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: self._running = True
-        raise NotImplementedError("TaskSrvProvider.start: TBD [TASK-39]")
+    def start(self, scenarios: Optional[List[Scenario]] = None) -> None:
+        """
+        Load scenario scripts and build the trigger index.
+
+        ``scenarios`` lets tests inject a list directly. When None, scenarios
+        are imported from ``config.scenarios.ALL`` (lazy import to avoid a
+        hard dependency at module load time).
+        """
+        if scenarios is None:
+            from config.scenarios import ALL as _ALL
+            scenarios = list(_ALL)
+        self._scenarios = scenarios
+        self._trigger_index = self._build_trigger_index(scenarios)
+        self._running = True
+        logging.info(
+            "TaskSrvProvider: loaded %d scenarios (%d triggers)",
+            len(self._scenarios), len(self._trigger_index),
+        )
 
     def stop(self) -> None:
-        """Cancel any active scenario, clear state."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: graceful abort of active sub-task
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: reset to IDLE, self._running = False
-        raise NotImplementedError("TaskSrvProvider.stop: TBD [TASK-39]")
+        """Abort the active scenario (if any), reset to IDLE."""
+        if self._state == TaskState.ACTIVE:
+            logging.info(
+                "TaskSrvProvider: stop() aborts active scenario '%s' at sub-task %d",
+                self._active_scenario.name if self._active_scenario else "?",
+                self._active_sub_task_idx,
+            )
+        self._reset_active()
+        self._state = TaskState.IDLE
+        self._running = False
 
     # ------------------------------------------------------------------
     # Inbound: STT keyword router (from Sound Sensor)
     # ------------------------------------------------------------------
     def on_audio(self, text: str, ts: Optional[float] = None) -> None:
         """
-        Match the transcript against scenario triggers; on hit, transition
+        Match the transcript against scenario triggers. On hit, transition
         IDLE → ACTIVE and dispatch the first sub-task. If already ACTIVE,
         the transcript is ignored (no preemption in scaffold).
         """
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: normalise text (strip / lowercase if configured)
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: lookup self._trigger_index; ignore if no hit
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: if self._state != IDLE: log + return
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: load scenario, set ACTIVE, _dispatch_current()
-        raise NotImplementedError("TaskSrvProvider.on_audio: TBD [TASK-39]")
+        if not self._running:
+            logging.debug("TaskSrvProvider.on_audio: not running, ignoring")
+            return
+        if self._state == TaskState.ACTIVE:
+            logging.debug(
+                "TaskSrvProvider.on_audio: scenario active, ignoring '%s'", text
+            )
+            return
+        matched = self._match_trigger(text)
+        if matched is None:
+            return
+        logging.info(
+            "TaskSrvProvider: trigger '%s' matched scenario '%s'",
+            text, matched.name,
+        )
+        self._activate(matched)
 
     # ------------------------------------------------------------------
     # Periodic tick (driven by TaskSrvBg)
     # ------------------------------------------------------------------
     def tick(self) -> None:
         """
-        One success-evaluation cycle. If ACTIVE: evaluate current sub-task
-        criterion against UnitreeG1Provider state; advance / fail / timeout.
-        If IDLE: no-op.
+        One success-evaluation cycle.
+
+        IDLE / SUCCESS / FAILED states are flipped back to IDLE here so the
+        transient terminal states are observable for exactly one tick by
+        the GUI poller, then cleared.
         """
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: if self._state != ACTIVE: return
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: read unitree_g1.uwb_pose / .joint_state caches
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: evaluate _evaluate_criterion(...) → True/False
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: on True: _advance_sub_task() or _finish_success()
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: on timeout: _finish_failure()
-        raise NotImplementedError("TaskSrvProvider.tick: TBD [TASK-39]")
+        if self._state in (TaskState.SUCCESS, TaskState.FAILED):
+            self._reset_active()
+            self._state = TaskState.IDLE
+            return
+        if self._state != TaskState.ACTIVE:
+            return
+        sub_task = self.active_sub_task
+        if sub_task is None:
+            # Shouldn't happen in ACTIVE state, but guard.
+            self._finish_failure(reason="no active sub-task")
+            return
+        # Success check
+        uwb_cache = getattr(self._unitree_g1, "uwb_pose", None)
+        joint_cache = getattr(self._unitree_g1, "joint_state", None)
+        try:
+            done = sub_task.success.evaluate(uwb_cache, joint_cache)
+        except Exception:
+            logging.exception("TaskSrvProvider.tick: criterion.evaluate raised")
+            done = False
+        if done:
+            self._advance_sub_task()
+            return
+        # Timeout check
+        elapsed = time.monotonic() - self._sub_task_dispatch_ts
+        if elapsed > sub_task.success.timeout_s:
+            self._finish_failure(reason=f"sub-task timeout ({elapsed:.1f}s)")
 
     # ------------------------------------------------------------------
     # Read-only state (polled by GUI BG — no push callback)
@@ -327,21 +391,186 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-    def _dispatch_current(self) -> None:
-        """Push current sub-task's prompt to Move Connector, record ts."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: self._move_connector.send(sub_task.prompt)
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: self._sub_task_dispatch_ts = time.monotonic()
-        raise NotImplementedError("TaskSrvProvider._dispatch_current: TBD [TASK-39]")
+    def _build_trigger_index(
+        self, scenarios: List[Scenario]
+    ) -> Dict[str, Scenario]:
+        index: Dict[str, Scenario] = {}
+        for sc in scenarios:
+            for trig in sc.triggers:
+                key = trig.lower() if self._config.case_insensitive_keywords else trig
+                if key in index and index[key].name != sc.name:
+                    raise ValueError(
+                        f"Duplicate trigger '{trig}' in scenarios "
+                        f"'{index[key].name}' and '{sc.name}'"
+                    )
+                index[key] = sc
+        return index
 
-    def _evaluate_criterion(
-        self,
-        criterion: SuccessCriterion,
-        uwb_cache: Any,
-        joint_cache: Any,
-    ) -> bool:
-        """Pure-function criterion evaluator (no side effects)."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: dispatch on criterion.kind
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: UWB_POSE: L2 xy + abs yaw within tolerance
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: JOINT_STATE: |actual - target| <= joint_tolerance
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: COMPOSITE: all(children evaluated recursively)
-        raise NotImplementedError("TaskSrvProvider._evaluate_criterion: TBD [TASK-39]")
+    def _match_trigger(self, text: str) -> Optional[Scenario]:
+        haystack = text.lower() if self._config.case_insensitive_keywords else text
+        # Substring match; first hit wins.
+        for needle, scenario in self._trigger_index.items():
+            if needle in haystack:
+                return scenario
+        return None
+
+    def _activate(self, scenario: Scenario) -> None:
+        self._active_scenario = scenario
+        self._active_sub_task_idx = 0
+        self._state = TaskState.ACTIVE
+        self._dispatch_current()
+
+    def _dispatch_current(self) -> None:
+        sub_task = self.active_sub_task
+        if sub_task is None:
+            self._finish_failure(reason="dispatch with no active sub-task")
+            return
+        self._sub_task_dispatch_ts = time.monotonic()
+        if self._move_connector is None:
+            logging.warning(
+                "TaskSrvProvider: no MoveConnector bound; would dispatch '%s'",
+                sub_task.prompt,
+            )
+            return
+        # NOTE: OM1's MoveInput.action is typed MovementAction enum but the
+        # ros2 connector matches it as a string — we pass the VLA prompt as
+        # the action string. MoveConnector implementation will adapt to the
+        # whole-body VLA path (TASK-40); this just keeps the call site stable.
+        try:
+            self._move_connector.dispatch(sub_task.prompt)  # type: ignore[attr-defined]
+        except AttributeError:
+            # Fallback to the OM1 ActionConnector.connect() async API.
+            self._dispatch_via_connect(sub_task.prompt)
+        logging.info(
+            "TaskSrvProvider: dispatched sub-task[%d] '%s'",
+            self._active_sub_task_idx, sub_task.prompt,
+        )
+
+    def _dispatch_via_connect(self, prompt: str) -> None:
+        """Bridge to OM1 ``ActionConnector.connect(MoveInput(action=...))``."""
+        # Local import to avoid a hard module-load dependency on actions.*
+        # for tests that stub the connector entirely.
+        from actions.move.interface import MoveInput  # type: ignore
+        import asyncio
+
+        coro = self._move_connector.connect(MoveInput(action=prompt))
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            # No running loop (synchronous caller, e.g. tests) — best effort.
+            asyncio.run(coro)
+
+    def _advance_sub_task(self) -> None:
+        assert self._active_scenario is not None
+        self._active_sub_task_idx += 1
+        if self._active_sub_task_idx >= len(self._active_scenario.sub_tasks):
+            self._finish_success()
+            return
+        self._dispatch_current()
+
+    def _finish_success(self) -> None:
+        assert self._active_scenario is not None
+        logging.info(
+            "TaskSrvProvider: scenario '%s' completed successfully",
+            self._active_scenario.name,
+        )
+        self._speak(self._config.success_phrase)
+        self._state = TaskState.SUCCESS
+        # Active fields retained until next tick() so GUI can read them once.
+
+    def _finish_failure(self, reason: str) -> None:
+        scenario_name = (
+            self._active_scenario.name if self._active_scenario else "?"
+        )
+        logging.warning(
+            "TaskSrvProvider: scenario '%s' failed at sub-task %d (%s)",
+            scenario_name, self._active_sub_task_idx, reason,
+        )
+        self._speak(self._config.failure_phrase)
+        self._state = TaskState.FAILED
+
+    def _speak(self, phrase: str) -> None:
+        if not self._config.enable_speak_feedback:
+            return
+        if self._speak_connector is None:
+            logging.info("TaskSrvProvider: [speak] %s", phrase)
+            return
+        try:
+            self._speak_connector.dispatch(phrase)  # type: ignore[attr-defined]
+        except AttributeError:
+            from actions.speak.interface import SpeakInput  # type: ignore
+            import asyncio
+
+            coro = self._speak_connector.connect(SpeakInput(action=phrase))
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                asyncio.run(coro)
+
+    def _reset_active(self) -> None:
+        self._active_scenario = None
+        self._active_sub_task_idx = -1
+        self._sub_task_dispatch_ts = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Helpers — pose / joint state access that tolerates dict / dataclass / msg
+# ---------------------------------------------------------------------------
+
+
+def _get(obj: Any, name: str) -> Optional[float]:
+    """Fetch ``obj.name`` or ``obj[name]``; return None if absent."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        v = obj.get(name)
+    else:
+        v = getattr(obj, name, None)
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _joint_pos(state: Any, joint_name: str) -> Optional[float]:
+    """
+    Extract a single joint position from a JointState-like value.
+
+    Accepts:
+        - sensor_msgs.msg.JointState (.name list, .position list)
+        - dict {"name": [...], "position": [...]}
+        - dict {"joint_a": pos_a, ...}
+    """
+    if state is None:
+        return None
+    # Mapping-of-name form
+    if isinstance(state, dict) and joint_name in state and not isinstance(
+        state.get("name"), (list, tuple)
+    ):
+        try:
+            return float(state[joint_name])
+        except (TypeError, ValueError):
+            return None
+    names = state.get("name") if isinstance(state, dict) else getattr(state, "name", None)
+    positions = (
+        state.get("position") if isinstance(state, dict) else getattr(state, "position", None)
+    )
+    if names is None or positions is None:
+        return None
+    try:
+        idx = list(names).index(joint_name)
+    except ValueError:
+        return None
+    try:
+        return float(positions[idx])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _wrap_pi(angle: float) -> float:
+    """Wrap ``angle`` to (-pi, pi]."""
+    return (angle + math.pi) % (2 * math.pi) - math.pi

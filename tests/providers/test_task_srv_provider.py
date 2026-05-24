@@ -1,32 +1,38 @@
 """
-Tests for TaskSrvProvider scaffold (TASK-39).
+Tests for TaskSrvProvider (TASK-39).
 
-Placeholder — most methods are NotImplementedError today. Once the
-scenario loader + dispatch + success poll are wired, add:
-
-TODO(REQ-NEW-TASKSRV) [TASK-39]: scenario YAML loader fixture (tmp_path).
-TODO(REQ-NEW-TASKSRV) [TASK-39]: on_audio triggers a scenario, MoveConnector
-                                  stub records dispatched prompt.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: tick() with stub UnitreeG1Provider that
-                                  exposes UWB pose / joint_state TopicCaches;
-                                  assert success advances index.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: timeout path — freeze time, assert FAILED.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: state property reflects each transition
-                                  (IDLE → ACTIVE → SUCCESS → IDLE etc.) —
-                                  polled by GUI BG, no push callback.
+Covers:
+    - dataclass shape (SuccessCriterion subclasses + Scenario)
+    - lifecycle (start with injected scenarios, stop)
+    - on_audio keyword routing (match / case-insensitive / ignored when active)
+    - tick() advance + timeout
+    - dispatch via stub move connector
+    - bind() wiring
 """
+
+import math
+import time
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
 import pytest
 
 from providers.task_srv_provider import (
+    CompositeSuccess,
+    JointStateSuccess,
     Scenario,
     SubTask,
     SuccessCriterion,
-    SuccessKind,
     TaskSrvConfig,
     TaskSrvProvider,
     TaskState,
+    UwbPoseSuccess,
 )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -37,12 +43,57 @@ def _reset_singleton():
     TaskSrvProvider.reset()
 
 
+@dataclass
+class _Cache:
+    """Minimal UnitreeG1 TopicCache stand-in."""
+
+    value: Any = None
+    last_seen_ts: float = 0.0
+
+
+class _StubG1:
+    def __init__(self, uwb_pose=None, joint_state=None):
+        self.uwb_pose = _Cache(value=uwb_pose)
+        self.joint_state = _Cache(value=joint_state)
+
+
+class _StubConnector:
+    def __init__(self):
+        self.dispatched: List[str] = []
+
+    def dispatch(self, prompt: str) -> None:
+        self.dispatched.append(prompt)
+
+
+def _simple_scenario(name="demo", trigger="hello", n_subtasks=2) -> Scenario:
+    return Scenario(
+        name=name,
+        triggers=[trigger],
+        sub_tasks=[
+            SubTask(
+                prompt=f"step {i}",
+                success=JointStateSuccess(
+                    target_joint="j0",
+                    target_pos=1.0,
+                    tolerance=0.01,
+                    timeout_s=0.5,
+                ),
+            )
+            for i in range(n_subtasks)
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config / construction
+# ---------------------------------------------------------------------------
+
+
 def test_default_config_values():
     cfg = TaskSrvConfig()
     assert cfg.tick_rate_hz == 10.0
     assert cfg.case_insensitive_keywords is True
     assert cfg.enable_speak_feedback is True
-    assert cfg.scenarios_dir.endswith("/")
 
 
 def test_provider_initializes_with_defaults():
@@ -63,21 +114,17 @@ def test_state_property_starts_idle():
     p = TaskSrvProvider()
     assert p.state == TaskState.IDLE
     assert p.active_sub_task is None
+    assert p.active_scenario_name is None
+
+
+# ---------------------------------------------------------------------------
+# bind()
+# ---------------------------------------------------------------------------
 
 
 def test_bind_sets_dependencies():
     p = TaskSrvProvider()
-
-    class _StubG1:
-        pass
-
-    class _StubMove:
-        pass
-
-    class _StubSpeak:
-        pass
-
-    g1, mv, sp = _StubG1(), _StubMove(), _StubSpeak()
+    g1, mv, sp = _StubG1(), _StubConnector(), _StubConnector()
     p.bind(unitree_g1=g1, move_connector=mv, speak_connector=sp)
     assert p._unitree_g1 is g1
     assert p._move_connector is mv
@@ -86,62 +133,64 @@ def test_bind_sets_dependencies():
 
 def test_bind_speak_optional():
     p = TaskSrvProvider()
-    p.bind(unitree_g1=object(), move_connector=object())
+    p.bind(unitree_g1=_StubG1(), move_connector=_StubConnector())
     assert p._speak_connector is None
 
 
-def test_idle_state_exposes_none_active():
-    """GUI BG polls these properties; verify IDLE state returns None for both."""
-    p = TaskSrvProvider()
-    assert p.state == TaskState.IDLE
-    assert p.active_sub_task is None
-    assert p.active_scenario_name is None
+# ---------------------------------------------------------------------------
+# Success criterion shape + evaluate()
+# ---------------------------------------------------------------------------
 
 
-def test_lifecycle_methods_are_stubs():
-    p = TaskSrvProvider()
-    with pytest.raises(NotImplementedError):
-        p.start()
-    with pytest.raises(NotImplementedError):
-        p.stop()
-    with pytest.raises(NotImplementedError):
-        p.on_audio("양상추 꺼내줘")
-    with pytest.raises(NotImplementedError):
-        p.tick()
+def test_uwb_pose_success_within_tolerance():
+    c = UwbPoseSuccess(target=(1.0, 0.0, 0.0), tolerance_xy=0.2, tolerance_yaw=math.inf)
+    assert c.evaluate(_Cache(value={"x": 1.05, "y": -0.05}), _Cache()) is True
 
 
-# --- Dataclass shape (catches schema drift before YAML loader lands) -------
+def test_uwb_pose_success_outside_tolerance():
+    c = UwbPoseSuccess(target=(1.0, 0.0, 0.0), tolerance_xy=0.1, tolerance_yaw=math.inf)
+    assert c.evaluate(_Cache(value={"x": 1.5, "y": 0.0}), _Cache()) is False
 
 
-def test_success_criterion_uwb_pose_shape():
-    c = SuccessCriterion(
-        kind=SuccessKind.UWB_POSE,
-        target={"x": 1.5, "y": 0.3, "yaw": 0.0},
-        tolerance={"xy": 0.15, "yaw": 0.2},
-        timeout_s=30.0,
-    )
-    assert c.kind == SuccessKind.UWB_POSE
-    assert c.target["x"] == 1.5
-    assert c.children == []
+def test_uwb_pose_success_no_pose_value_yet():
+    c = UwbPoseSuccess(target=(1.0, 0.0, 0.0))
+    assert c.evaluate(_Cache(value=None), _Cache()) is False
 
 
-def test_success_criterion_joint_state_shape():
-    c = SuccessCriterion(
-        kind=SuccessKind.JOINT_STATE,
-        target_joint="left_gripper_finger_1",
-        target_pos=0.85,
-        joint_tolerance=0.05,
-        timeout_s=10.0,
-    )
-    assert c.target_joint == "left_gripper_finger_1"
-    assert c.target_pos == pytest.approx(0.85)
+def test_joint_state_success_dict_of_name_position_lists():
+    c = JointStateSuccess(target_joint="j0", target_pos=1.0, tolerance=0.05)
+    state = {"name": ["j0", "j1"], "position": [1.02, 0.0]}
+    assert c.evaluate(_Cache(), _Cache(value=state)) is True
 
 
-def test_success_criterion_composite_shape():
-    child_a = SuccessCriterion(kind=SuccessKind.UWB_POSE)
-    child_b = SuccessCriterion(kind=SuccessKind.JOINT_STATE)
-    c = SuccessCriterion(kind=SuccessKind.COMPOSITE, children=[child_a, child_b])
-    assert len(c.children) == 2
+def test_joint_state_success_dict_mapping_form():
+    c = JointStateSuccess(target_joint="j0", target_pos=1.0, tolerance=0.05)
+    assert c.evaluate(_Cache(), _Cache(value={"j0": 1.04})) is True
+    assert c.evaluate(_Cache(), _Cache(value={"j0": 1.2})) is False
+
+
+def test_joint_state_success_missing_joint():
+    c = JointStateSuccess(target_joint="missing", target_pos=1.0, tolerance=0.05)
+    assert c.evaluate(_Cache(), _Cache(value={"name": ["j0"], "position": [1.0]})) is False
+
+
+def test_composite_success_all_must_pass():
+    children = [
+        UwbPoseSuccess(target=(1.0, 0.0, 0.0), tolerance_xy=0.2, tolerance_yaw=math.inf),
+        JointStateSuccess(target_joint="j0", target_pos=1.0, tolerance=0.05),
+    ]
+    c = CompositeSuccess(children=children, timeout_s=5.0)
+    uwb_ok = _Cache(value={"x": 1.0, "y": 0.0})
+    joint_ok = _Cache(value={"j0": 1.0})
+    joint_bad = _Cache(value={"j0": 0.5})
+    assert c.evaluate(uwb_ok, joint_ok) is True
+    assert c.evaluate(uwb_ok, joint_bad) is False
+
+
+def test_success_criterion_is_abc():
+    """Cannot instantiate the bare abstract base."""
+    with pytest.raises(TypeError):
+        SuccessCriterion()  # type: ignore[abstract]
 
 
 def test_scenario_shape():
@@ -151,7 +200,12 @@ def test_scenario_shape():
         sub_tasks=[
             SubTask(
                 prompt="Walk to the refrigerator.",
-                success=SuccessCriterion(kind=SuccessKind.UWB_POSE),
+                success=UwbPoseSuccess(
+                    target=(1.5, 0.3, 0.0),
+                    tolerance_xy=0.15,
+                    tolerance_yaw=math.inf,
+                    timeout_s=30.0,
+                ),
             ),
         ],
     )
@@ -159,3 +213,128 @@ def test_scenario_shape():
     assert len(s.triggers) == 2
     assert len(s.sub_tasks) == 1
     assert s.sub_tasks[0].prompt.startswith("Walk")
+
+
+# ---------------------------------------------------------------------------
+# start() / stop() lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_start_loads_injected_scenarios():
+    p = TaskSrvProvider()
+    sc = _simple_scenario(trigger="냉장고에서 오이")
+    p.start(scenarios=[sc])
+    assert p._running is True
+    assert p._scenarios == [sc]
+    # case-insensitive index
+    assert "냉장고에서 오이" in p._trigger_index
+
+
+def test_start_raises_on_duplicate_trigger():
+    p = TaskSrvProvider()
+    a = _simple_scenario(name="a", trigger="overlap")
+    b = _simple_scenario(name="b", trigger="overlap")
+    with pytest.raises(ValueError):
+        p.start(scenarios=[a, b])
+
+
+def test_stop_resets_to_idle():
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=_StubConnector())
+    p.start(scenarios=[_simple_scenario()])
+    p.on_audio("hello")  # → ACTIVE
+    assert p.state == TaskState.ACTIVE
+    p.stop()
+    assert p.state == TaskState.IDLE
+    assert p.active_sub_task is None
+    assert p._running is False
+
+
+# ---------------------------------------------------------------------------
+# on_audio() keyword routing
+# ---------------------------------------------------------------------------
+
+
+def test_on_audio_triggers_scenario_and_dispatches_first_subtask():
+    mv = _StubConnector()
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="냉장고")])
+    p.on_audio("KAPEX: 냉장고 가까이 가줘")
+    assert p.state == TaskState.ACTIVE
+    assert mv.dispatched == ["step 0"]
+    assert p.active_scenario_name == "demo"
+    assert p.active_sub_task.prompt == "step 0"
+
+
+def test_on_audio_ignored_when_already_active():
+    mv = _StubConnector()
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="hello")])
+    p.on_audio("hello there")
+    p.on_audio("hello again")  # ignored
+    assert mv.dispatched == ["step 0"]
+
+
+def test_on_audio_no_match_keeps_idle():
+    mv = _StubConnector()
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="hello")])
+    p.on_audio("goodbye")
+    assert p.state == TaskState.IDLE
+    assert mv.dispatched == []
+
+
+def test_on_audio_ignored_when_not_running():
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=_StubConnector())
+    # No .start() — _running is False.
+    p.on_audio("hello")
+    assert p.state == TaskState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# tick() — advance / success / timeout
+# ---------------------------------------------------------------------------
+
+
+def test_tick_advances_on_success_then_finishes():
+    mv = _StubConnector()
+    g1 = _StubG1(joint_state={"j0": 1.0})  # matches JointStateSuccess(target_pos=1.0)
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=g1, move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="go", n_subtasks=2)])
+    p.on_audio("go")
+    # First sub-task already satisfied → advance to sub-task 1
+    p.tick()
+    assert mv.dispatched == ["step 0", "step 1"]
+    # Second sub-task also satisfied → SUCCESS state
+    p.tick()
+    assert p.state == TaskState.SUCCESS
+    # Next tick clears to IDLE
+    p.tick()
+    assert p.state == TaskState.IDLE
+    assert p.active_sub_task is None
+
+
+def test_tick_does_nothing_when_idle():
+    p = TaskSrvProvider()
+    p.tick()  # no provider state — no crash
+    assert p.state == TaskState.IDLE
+
+
+def test_tick_times_out_when_criterion_never_passes():
+    mv = _StubConnector()
+    g1 = _StubG1(joint_state={"j0": 0.0})  # never reaches target_pos=1.0
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=g1, move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="go", n_subtasks=1)])
+    p.on_audio("go")
+    # Force the dispatch timestamp into the past beyond timeout_s (0.5).
+    p._sub_task_dispatch_ts = time.monotonic() - 5.0
+    p.tick()
+    assert p.state == TaskState.FAILED
+    p.tick()
+    assert p.state == TaskState.IDLE

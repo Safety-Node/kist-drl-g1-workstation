@@ -98,23 +98,37 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
     def run(self) -> None:
         """
         Fixed-rate tick loop driving ``TaskSrvProvider.tick()`` until
-        ``should_stop()`` returns True.
+        ``should_stop()`` returns True. Drift-free pacing via cumulative
+        ``next_t`` so a slow tick doesn't permanently shift the schedule.
         """
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: from providers.task_srv_provider import TaskSrvProvider
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: self._task_srv = TaskSrvProvider()  # singleton
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: period = 1.0 / self.config.tick_rate_hz
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: next_t = time.monotonic()
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]: while not self.should_stop():
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:     try:
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:         self._task_srv.tick()
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:     except Exception as e:
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:         if self.config.swallow_tick_exceptions:
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:             logging.exception(...)
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:         else: raise
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:     next_t += period
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:     dt = next_t - time.monotonic()
-        # TODO(REQ-NEW-TASKSRV) [TASK-39]:     if dt > 0: self.sleep(dt)
-        raise NotImplementedError("TaskSrvBg.run: TBD [TASK-39]")
+        import time as _time
+        from providers.task_srv_provider import TaskSrvProvider
+
+        self._task_srv = TaskSrvProvider()  # already-started singleton
+        period = 1.0 / float(self.config.tick_rate_hz)
+        next_t = _time.monotonic()
+        logging.info(
+            "TaskSrvBg: tick loop entering (period=%.3fs, swallow_exc=%s)",
+            period, self.config.swallow_tick_exceptions,
+        )
+        while not self.should_stop():
+            try:
+                self._task_srv.tick()
+            except Exception:
+                if self.config.swallow_tick_exceptions:
+                    logging.exception("TaskSrvBg: tick() raised; swallowing")
+                else:
+                    logging.exception("TaskSrvBg: tick() raised; exiting loop")
+                    return
+            next_t += period
+            dt = next_t - _time.monotonic()
+            if dt > 0:
+                if not self.sleep(dt):
+                    return  # stop_event fired during sleep
+            else:
+                # Overran the period; reset baseline so we don't tight-loop.
+                next_t = _time.monotonic()
+        logging.info("TaskSrvBg: tick loop exited (stop signalled)")
 
     def stop(self) -> None:
         """Base class handles the stop_event; nothing extra to release."""
