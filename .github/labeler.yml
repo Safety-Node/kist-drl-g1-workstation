@@ -15,14 +15,6 @@ python:
   - changed-files:
     - any-glob-to-any-file: '**/*.py'
 
-# Docker/Infrastructure
-infrastructure:
-  - changed-files:
-    - any-glob-to-any-file:
-      - '**/Dockerfile'
-      - '**/docker-compose*.yml'
-      - '**/*.dockerfile'
-
 # CI/CD changes
 ci-cd:
   - changed-files:
