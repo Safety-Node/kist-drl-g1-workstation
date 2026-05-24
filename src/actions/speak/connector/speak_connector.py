@@ -25,7 +25,7 @@ from actions.base import ActionConfig, ActionConnector
 from actions.speak.interface import SpeakInput
 
 
-class SpeakG1WorkstationConnector(ActionConnector[ActionConfig, SpeakInput]):
+class SpeakConnector(ActionConnector[ActionConfig, SpeakInput]):
     """
     Connector that forwards Cortex's textual speak action to the
     workstation TTS Provider (Naver Clova).
@@ -34,11 +34,11 @@ class SpeakG1WorkstationConnector(ActionConnector[ActionConfig, SpeakInput]):
     def __init__(self, config: ActionConfig):
         super().__init__(config)
         # TODO: obtain NaverClovaTTSProvider handle
-        logging.info("SpeakG1WorkstationConnector: skeleton initialized")
+        logging.info("SpeakConnector: skeleton initialized")
 
     async def connect(self, output_interface: SpeakInput) -> None:
         """Forward SpeakInput.action (text) to the TTS Provider."""
         # TODO: split into sentences for streaming synthesis
         # TODO: await NaverClovaTTSProvider.synthesize(text)
         # TODO: pipe resulting PCM via UnitreeG1Provider.publish_audio_out
-        raise NotImplementedError("SpeakG1WorkstationConnector.connect: TBD")
+        raise NotImplementedError("SpeakConnector.connect: TBD")

@@ -22,8 +22,8 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 | 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade via Zenoh bridge (TASK-41 scaffold) |
 | 4 | VLA Provider | `src/providers/vla_provider.py` (TBD) | GR00T N1.7 + GearSonic (placement TBD). Vendor reference: `src/providers/example/vla_groot_provider.py` |
 | 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` (TASK-39 scaffold) | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
-| 6 | Move Connector | `src/actions/move/connector/g1_workstation.py` | Routes sub-task prompts to VLA |
-| 7 | Speak Connector | `src/actions/speak/connector/g1_workstation.py` | Text → TTS Provider |
+| 6 | Move Connector | `src/actions/move/connector/move_connector.py` | Routes sub-task prompts to VLA |
+| 7 | Speak Connector | `src/actions/speak/connector/speak_connector.py` | Text → TTS Provider |
 | 8 | Sound Sensor | `src/inputs/plugins/sound_sensor.py` | STT transcript → TaskSrvProvider |
 | 9 | GUI Background | `src/backgrounds/plugins/gui_background.py` | Streams video + task status to Display System |
 | 10 | IOProvider | `src/providers/io_provider.py` | OM1 infra |
