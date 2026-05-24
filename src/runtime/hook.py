@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from providers.elevenlabs_tts_provider import ElevenLabsTTSProvider
-from providers.kokoro_tts_provider import KokoroTTSProvider
-from providers.riva_tts_provider import RivaTTSProvider
+# NOTE: MessageHookHandler (OM1 TTS-based lifecycle message hook) removed
+# 2026-05-24 as part of OM1 cleanup. Re-wire via TTSProvider (Naver Clova)
+# when needed — see CONV-003 / TTS Provider scaffold.
 
 
 class LifecycleHookType(Enum):
@@ -70,76 +70,6 @@ class HookConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
-
-
-class MessageHookConfig(HookConfig):
-    """
-    Configuration for MessageHookHandler.
-
-    Parameters
-    ----------
-    message : str
-        The message to log or announce. Supports {variable} formatting.
-    tts_provider : str
-        The TTS provider to use ('elevenlabs', 'kokoro', 'riva'). Defaults to 'elevenlabs'.
-    base_url : Optional[str]
-        The URL endpoint for the TTS service. Provider-specific defaults apply.
-    api_key : Optional[str]
-        OpenMind API key for TTS service.
-    elevenlabs_api_key : Optional[str]
-        ElevenLabs API key (only for 'elevenlabs' provider).
-    voice_id : str
-        Voice ID for the TTS provider.
-    model_id : str
-        Model ID for the TTS provider.
-    output_format : str
-        Audio output format.
-    rate : Optional[int]
-        Audio sample rate in Hz.
-    enable_tts_interrupt : bool
-        Enable TTS interrupt capability.
-    """
-
-    message: str = Field(
-        default="",
-        description="The message to log or announce. Supports {variable} formatting.",
-    )
-    tts_provider: str = Field(
-        default="elevenlabs",
-        description="The TTS provider to use ('elevenlabs', 'kokoro', 'riva')",
-    )
-    base_url: Optional[str] = Field(
-        default=None,
-        description="The URL endpoint for the TTS service. Provider-specific defaults apply.",
-    )
-    api_key: Optional[str] = Field(
-        default=None,
-        description="OpenMind API key for TTS service",
-    )
-    elevenlabs_api_key: Optional[str] = Field(
-        default=None,
-        description="ElevenLabs API key (only for 'elevenlabs' provider)",
-    )
-    voice_id: Optional[str] = Field(
-        default=None,
-        description="Voice ID for the TTS provider",
-    )
-    model_id: Optional[str] = Field(
-        default=None,
-        description="Model ID for the TTS provider",
-    )
-    output_format: Optional[str] = Field(
-        default=None,
-        description="Audio output format",
-    )
-    rate: Optional[int] = Field(
-        default=None,
-        description="Audio sample rate in Hz",
-    )
-    enable_tts_interrupt: bool = Field(
-        default=False,
-        description="Enable TTS interrupt capability",
-    )
 
 
 class CommandHookConfig(HookConfig):
@@ -230,96 +160,6 @@ class LifecycleHookHandler:
             True if execution was successful, False otherwise
         """
         raise NotImplementedError
-
-
-class MessageHookHandler(LifecycleHookHandler):
-    """
-    Handler that logs or announces a message.
-    """
-
-    def __init__(self, config: MessageHookConfig):
-        super().__init__(config)
-        self.config: MessageHookConfig = config
-
-    async def execute(self, context: Dict[str, Any]) -> bool:
-        """
-        Execute the lifecycle message.
-
-        Parameters
-        ----------
-        context : Dict[str, Any]
-            Context information for the hook execution
-
-        Returns
-        -------
-        bool
-            True if execution was successful, False otherwise
-        """
-        if self.config.message:
-            try:
-                formatted_message = self.config.message.format(**context)
-                logging.info(f"Lifecycle hook message: {formatted_message}")
-
-                try:
-                    provider = self._create_tts_provider()
-                    provider.start()
-                    provider.add_pending_message(formatted_message)
-                except Exception as e:
-                    logging.error(f"Error adding TTS message: {e}")
-                    return False
-
-                return True
-            except Exception as e:
-                logging.error(f"Error formatting lifecycle message: {e}")
-                return False
-        return True
-
-    def _create_tts_provider(self):
-        """
-        Create the appropriate TTS provider based on configuration.
-
-        Returns
-        -------
-        Union[ElevenLabsTTSProvider, KokoroTTSProvider, RivaTTSProvider]
-            The configured TTS provider instance
-
-        Raises
-        ------
-        ValueError
-            If an unsupported TTS provider is specified
-        """
-        provider_type = self.config.tts_provider.lower()
-
-        if provider_type == "elevenlabs":
-            return ElevenLabsTTSProvider(
-                url=self.config.base_url or "https://api.openmind.com/api/core/elevenlabs/tts",
-                api_key=self.config.api_key,
-                elevenlabs_api_key=self.config.elevenlabs_api_key,
-                voice_id=self.config.voice_id or "JBFqnCBsd6RMkjVDRZzb",
-                model_id=self.config.model_id or "eleven_flash_v2_5",
-                output_format=self.config.output_format or "pcm_16000",
-                rate=self.config.rate or 16000,
-                enable_tts_interrupt=self.config.enable_tts_interrupt,
-            )
-        elif provider_type == "kokoro":
-            return KokoroTTSProvider(
-                url=self.config.base_url or "http://127.0.0.1:8880/v1",
-                api_key=self.config.api_key,
-                voice_id=self.config.voice_id or "af_bella",
-                model_id=self.config.model_id or "kokoro",
-                output_format=self.config.output_format or "pcm",
-                rate=self.config.rate or 24000,
-                enable_tts_interrupt=self.config.enable_tts_interrupt,
-            )
-        elif provider_type == "riva":
-            return RivaTTSProvider(
-                url=self.config.base_url or "http://127.0.0.1:50051",
-                api_key=self.config.api_key,
-            )
-        else:
-            raise ValueError(
-                f"Unsupported TTS provider: {provider_type}. " f"Supported providers are: elevenlabs, kokoro, riva"
-            )
 
 
 class CommandHookHandler(LifecycleHookHandler):
@@ -545,10 +385,7 @@ def create_hook_handler(hook: LifecycleHook) -> Optional[LifecycleHookHandler]:
     handler_type = hook.handler_type.lower()
 
     try:
-        if handler_type == "message":
-            config = MessageHookConfig(**hook.handler_config)
-            return MessageHookHandler(config)
-        elif handler_type == "command":
+        if handler_type == "command":
             config = CommandHookConfig(**hook.handler_config)
             return CommandHookHandler(config)
         elif handler_type == "function":
