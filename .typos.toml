@@ -9,9 +9,3 @@ OT = "OT"
 WAAS = "WAAS"
 ser = "ser"
 asend = "asend"
-
-[files]
-extend-exclude = [
-  "src/unitree/",
-  "src/ubtech/",
-]

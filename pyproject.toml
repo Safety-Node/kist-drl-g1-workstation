@@ -69,7 +69,7 @@ pythonpath = ["src"]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-m \"not integration\""
-norecursedirs = ["src/unitree", "system_hw_test", "src/ubtech"]
+norecursedirs = ["system_hw_test"]
 markers = [
     "integration: marks tests as integration tests",
 ]
@@ -81,8 +81,6 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src"]
 omit = [
-    "src/unitree/*",
-    "src/ubtech/*",
     "*/tests/*",
     "*/__pycache__/*",
 ]
@@ -106,20 +104,19 @@ skip_covered = false
 line-length = 120
 target-version = ["py312"]
 include = '\.pyi?$'
-exclude = "(.venv)|(/src/unitree)|(/src/ubtech)"
+exclude = "(.venv)"
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 line_length = 120
 sources = ["src", "tests"]
-skip_glob = [".venv*", "/src/unitree", "/src/ubtech"]
+skip_glob = [".venv*"]
 
 [tool.ruff]
 line-length = 120
 indent-width = 4
 src = ["src"]
-exclude = ["src/unitree", "src/ubtech"]
 
 [tool.ruff.lint]
 select = ["E", "F", "D"]
@@ -136,6 +133,6 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 convention = "numpy"
 
 [tool.vulture]
-exclude = ["src/unitree/", "src/ubtech/", "system_hw_test/"]
+exclude = ["system_hw_test/"]
 min_confidence = 80
 paths = ["src"]
