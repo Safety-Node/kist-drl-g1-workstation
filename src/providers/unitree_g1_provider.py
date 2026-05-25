@@ -44,7 +44,7 @@ TODO(REQ-32) [TASK-41]: register_estop_callback push API for ≤200 ms E-STOP
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, TypedDict
+from typing import Any, Callable, List, Literal, Optional, TypedDict
 
 from .singleton import singleton
 
@@ -84,6 +84,10 @@ class JointCmd(TypedDict):
     kp: List[float]
     kd: List[float]
     tau_ff: List[float]
+    # TODO(REQ-33) [TASK-41]: clarify mode enum semantics per ICD IF-6 +
+    # Unitree G1 SDK (rt/arm_sdk vs rt/lowcmd). Typical Unitree motor
+    # mode values: 0=disabled/damp, 1=position control (PD), other values
+    # SDK-version-specific. Promote to ``Literal[...]`` once locked.
     mode: int
     weight: float          # respected on arm path; ignored on low path
     chunk_id: int          # CONV-006 chunk boundary detection on NX
@@ -93,7 +97,7 @@ class JointCmd(TypedDict):
 class LocoCommand(TypedDict):
     """High-level posture transition for Unitree LocoClient."""
 
-    name: str              # "StandUp" | "SitDown" | "Damp" | "BalanceStand"
+    name: Literal["StandUp", "SitDown", "Damp", "BalanceStand"]
 
 
 @singleton
