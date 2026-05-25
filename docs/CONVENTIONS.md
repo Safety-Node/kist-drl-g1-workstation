@@ -217,6 +217,38 @@ KIST 단장님 학생들 (per 2026-05-22 mail).
 
 ---
 
+## CONV-008 — Stay close to OM1 shape; document deviations
+
+**Status**: Accepted · **Date**: 2026-05-25
+
+### Context
+Team (3 devs) is familiar with OM1 patterns from upstream. Silent deviations
+from OM1 file/section/symbol naming cost onboarding time — a new contributor
+opens `mode_config.json5` expecting OM1 schema and is lost if they find a
+parallel design instead. CONV-001..007 already encode our deliberate
+deviations; this CONV makes the principle itself explicit so future PRs
+don't accumulate undocumented drift.
+
+### Decision
+1. **Config files** (`mode_config.json5` and successors) match OM1 section
+   names verbatim — even sections we no longer wire (e.g. `cortex_llm: null`)
+   stay in the schema as placeholders, not omitted.
+2. **Code-level deviations** require a CONV entry (CONV-001..007 are the
+   precedent). When the deviation is unavoidable, mirror OM1 names where
+   possible (e.g. `ActionConnector.connect(MoveInput)` kept verbatim even
+   though our TaskSrvProvider also drives it).
+3. **When in doubt, mirror OM1 shape** even if our runtime ignores it.
+   OM1-familiar muscle memory should transfer to this repo by default.
+
+### Consequences
+- ✅ Devs reading our config immediately know which knob is which.
+- ✅ Future LLM revival (CONV-004 reversal path) just enables sections
+  that are already present.
+- ⚠️ Adds a one-line "why this section is null" comment when sections are
+  intentionally inert.
+
+---
+
 ## Pattern for new conventions
 
 When a decision affects multiple tasks or future code review, add a new
