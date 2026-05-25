@@ -337,6 +337,41 @@ in ``run.py`` before any consumer that references it.
 
 ---
 
+## CONV-011 — IOProvider is OM1 infra, NOT used in KIST data flow
+
+**Status**: Accepted · **Date**: 2026-05-25
+
+### Context
+OM1 ``IOProvider`` was the LLM Fuser's I/O bulletin board (system prompt,
+fuser inputs, llm prompt, mode transition input, generic ``_inputs`` /
+``_variables`` dict). CONV-004 deferred the LLM Cortex, so the LLM-shaped
+fields are dead.
+
+We briefly considered repurposing ``IOProvider._inputs`` as a generic
+Provider → GUI bulletin board (Providers ``add_input("task.state", ...)``,
+GUI ``get_input(...)``). Rejected — see Decision.
+
+### Decision
+KIST components do NOT read from or write to ``IOProvider``. Inter-component
+state flows via direct ``@singleton`` polling (CONV-010). ``GUIBackground``
+is the only consumer of cross-provider state and reads each provider's
+own public property surface (``TaskSrvProvider.state``,
+``UnitreeG1Provider.estop``, ``STTProvider.state``,
+``TTSProvider.is_synthesizing``, etc.).
+
+``IOProvider`` remains in ``src/providers/io_provider.py`` as untouched OM1
+infrastructure for the same reason ``runtime/cortex.py`` does (CONV-004):
+in case the LLM Cortex / mode system is revived later.
+
+### Consequences
+- ✅ Single pattern (CONV-010) — no new "bulletin board" concept to teach.
+- ✅ Providers stay write-side single-responsibility (own state only).
+- ✅ GUI dependency surface is explicit at construction.
+- ⚠️ Adding a new GUI element means importing one more Provider in
+  ``GUIBackground``. Acceptable for the demo's component count.
+
+---
+
 ## Pattern for new conventions
 
 When a decision affects multiple tasks or future code review, add a new
