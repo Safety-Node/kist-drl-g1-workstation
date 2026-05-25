@@ -6,9 +6,14 @@ for whole-body manipulation + locomotion (CONV-005), with a deterministic
 escape hatch via UnitreeG1.publish_loco_cmd for posture transitions that
 GR00T N1.7 may not be reliably trained on (demo entry / exit / fallback).
 
+Typical scenarios (``config/scenarios/*.py``) only emit VLA-path prompts;
+the LOCO path is a safety net for posture transitions inserted *outside*
+the scenario flow (run.py boot / E-STOP recovery / operator hotkey).
+
 Routing policy:
   - prompts matching ``_LOCO_KEYWORDS`` (case-insensitive substring) →
-    UnitreeG1.publish_loco_cmd(StandUp / SitDown / Damp / BalanceStand)
+    UnitreeG1.publish_loco_cmd via ``_LOCO_MAP`` (lowercase → CamelCase
+    LocoClient name)
   - all other prompts → VLA.infer(prompt) (whole-body action chunk stream)
 
 Threading + error policy:
@@ -37,7 +42,15 @@ from providers.unitree_g1_provider import UnitreeG1Provider
 from providers.vla_provider import VLAProvider
 
 
-_LOCO_KEYWORDS = ("stand up", "sit down", "damp", "balance stand")
+# prompt substring → Unitree LocoClient command name.
+# Keep keys lowercase; matcher lowercases the prompt before lookup.
+_LOCO_MAP = {
+    "stand up": "StandUp",
+    "sit down": "SitDown",
+    "damp": "Damp",
+    "balance stand": "BalanceStand",
+}
+_LOCO_KEYWORDS = tuple(_LOCO_MAP.keys())
 
 
 class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
@@ -54,9 +67,11 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
 
     async def connect(self, output_interface: MoveInput) -> None:
         # TODO(REQ-31) [TASK-44]: try/except — log + swallow, NEVER re-raise
-        # TODO(REQ-31) [TASK-44]: lower = output_interface.action.lower()
-        #     if any(k in lower for k in _LOCO_KEYWORDS):
-        #         self._unitree_g1.publish_loco_cmd({"name": <StandUp|SitDown|Damp|BalanceStand>})
-        #     else:
-        #         await self._vla.infer(output_interface.action)
+        # TODO(REQ-31) [TASK-44]: routing:
+        #     lower = output_interface.action.lower()
+        #     for kw, name in _LOCO_MAP.items():
+        #         if kw in lower:
+        #             self._unitree_g1.publish_loco_cmd({"name": name})
+        #             return
+        #     await self._vla.infer(output_interface.action)
         raise NotImplementedError("MoveConnector.connect: TBD [TASK-44]")
