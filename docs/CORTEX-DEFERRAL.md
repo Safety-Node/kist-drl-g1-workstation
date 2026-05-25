@@ -74,8 +74,11 @@ KAPEX speaks: "오이 가져와 부탁해요"
   → VLAProvider.infer(prompt) → action_horizon-step chunk @ ~15 Hz
                                 (default 16, KIST L40 ~63.9 ms / chunk
                                 assumed; RTX 4090 unmeasured, TBD)
-                              → 100 Hz step replay on PC
-  → UnitreeG1.publish_joint_cmd_arm + publish_joint_cmd_low
+                              → arm/low frozenset split (PC)
+  → UnitreeG1.publish_joint_chunk_arm + publish_joint_chunk_low
+                              → JointCmdChunk on /bridge/cmd/{arm,low}
+                              → NX motor_controller paces 100 Hz +
+                                queue_aggregate.crossfade() (CONV-006 REVISED)
   → NX safety_monitor → motor_controller → G1 motors
 ```
 

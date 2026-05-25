@@ -49,12 +49,15 @@
       backend: "groot_n17",
       model_server_url: "http://localhost:8000",
       // matches KIST fine-tune choice (NVIDIA example default is 8;
-      // 16 per KIST measurement, source TBD — see CONV-006)
+      // 16 per KIST measurement, source TBD — see CONV-006 REVISED).
+      // Drives JointCmdChunk.steps[] length on /bridge/cmd/{arm,low}.
       action_horizon: 16,
-      // assumed — KIST L40 ~63.9 ms / chunk (~15.6 Hz, source TBD);
-      // RTX 4090 unmeasured. TensorRT 30-50 Hz plausible (CONV-006).
+      // PC publishes chunks at the VLA inference cadence; NX paces 100 Hz
+      // (CONV-006 REVISED 2026-05-26). Assumed ~15 Hz — KIST L40
+      // ~63.9 ms / chunk (~15.6 Hz, source TBD); RTX 4090 unmeasured.
+      // Informational: setting this higher does NOT make the model emit
+      // faster.
       chunk_emit_rate_hz: 15.0,
-      step_replay_rate_hz: 100.0,
       gearsonic_enabled: true,
       gearsonic_device: "cuda:0",
       joint_delta_clip_rad: 0.25,

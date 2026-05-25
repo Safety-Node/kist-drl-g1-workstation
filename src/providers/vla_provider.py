@@ -5,24 +5,28 @@ Vendor-agnostic VLA client. Default backend: NVIDIA GR00T N1.7 (3B) whole-body,
 served by KIST Model Server.
 
 - Whole-body locomotion + manipulation (CONV-005).
-- ~15 Hz chunk emission (assumed — KIST L40 ~63.9 ms / chunk, RTX 4090
-  unmeasured; source TBD), `action_horizon`-step chunks (default 16 per
-  KIST fine-tune; NVIDIA example default 8) → 100 Hz step replay on PC
-  (CONV-006 is canonical). JointCmd carries (chunk_id, step_index) so NX
-  can detect chunk boundaries for an optional crossfade fallback
-  (default OFF — canonical crossfade is here).
+- PC publishes chunks; NX paces 100 Hz (CONV-006 REVISED 2026-05-26 —
+  chunk-as-wire). PC runs at the VLA inference cadence (~15 Hz assumed,
+  KIST L40 ~63.9 ms / chunk; RTX 4090 unmeasured; source TBD). Each
+  inference produces one `action_horizon`-step chunk (default 16 per
+  KIST fine-tune; NVIDIA example default 8 — source TBD) which is split
+  arm/low and published as TWO `JointCmdChunk` DDS messages.
 - GearSonic balance-correction lives inside this provider (CONV-007).
   Placement TBD (PC GPU / separate Jetson / NX); external interface stable.
 
 Pipeline ordering (LOCKED for safety):
-    VLA chunk  →  GearSonic correct  →  safety clip  →  enqueue  →  publish
+    VLA chunk  →  GearSonic correct  →  safety clip  →  arm/low split  →  publish
 GearSonic precedes the clip so the balance-corrected joint targets are still
 subject to the safety envelope; clipping the VLA output before GearSonic
 would let the balance stage produce out-of-envelope corrections silently.
 
 TODO(REQ-39) [TASK-40]: connect to KIST Model Server (gRPC/HTTP).
 TODO(REQ-31) [TASK-40]: obs assembly (RGB + 29-DoF joint + IMU base/ankle L/R).
-TODO(REQ-31) [TASK-40]: chunk decode → 100 Hz step replay + PC-side crossfade.
+TODO(REQ-31) [TASK-40]: chunk publish — split 29-DoF action across arm/low
+                        frozensets and emit two JointCmdChunk messages.
+                        100 Hz pacing + crossfade + empty-queue handling now
+                        live on NX (motor_controller + queue_aggregate),
+                        not here (CONV-006 REVISED).
 TODO(REQ-43) [TASK-40]: GearSonic stage (spec deferred — KIST 단장님 학생들).
 TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER GearSonic.
 TODO(REQ-39) [TASK-40]: E-STOP — start() subscribes self._on_estop via
@@ -32,13 +36,15 @@ TODO(REQ-39) [TASK-40]: E-STOP — start() subscribes self._on_estop via
                         decides next scenario / posture).
 TODO(REQ-39) [TASK-40]: arm vs low joint split — define _ARM_JOINTS /
                         _LOW_JOINTS frozensets (per ICD IF-6 + 2026-05-22
-                        lower-body addition) and route step joint subsets
-                        to publish_joint_cmd_arm / publish_joint_cmd_low.
+                        lower-body addition) and route subset of each
+                        chunk step to publish_joint_chunk_arm /
+                        publish_joint_chunk_low.
 TODO(REQ-39) [TASK-40]: request_timeout_s policy — on model-server timeout
                         the loop should retry up to 2x (~1 s total) before
                         surfacing the failure to TaskSrvProvider; a single
-                        lag spike must NOT fail the sub-task. Last-known
-                        chunk keeps replaying during the retry window.
+                        lag spike must NOT fail the sub-task. NX republishes
+                        the last step of the previous chunk at 100 Hz during
+                        the retry window (empty-queue policy on NX side).
 """
 
 import logging
@@ -70,9 +76,10 @@ class VLAConfig:
     # the sub-task (see TODO in module docstring); last-known chunk keeps
     # replaying during the retry window.
     request_timeout_s: float = 1.0
-    # Inference + replay rates (CONV-006 — canonical wording).
+    # Inference rate (CONV-006 REVISED — canonical wording).
     # Steps per chunk. Currently 16 per KIST fine-tune choice (NVIDIA's
     # public example default is 8 — source for KIST's 16 is TBD).
+    # Drives JointCmdChunk.steps[] length on /bridge/cmd/{arm,low}.
     action_horizon: int = 16
     # GR00T model property — actual emission rate is set by model-server
     # inference latency: KIST L40 measured ~63.9 ms / chunk (~15.6 Hz,
@@ -80,9 +87,9 @@ class VLAConfig:
     # 27.9 ms / 35.9 Hz; with TensorRT applied on the 4090, 30-50 Hz is
     # plausible. Setting this value higher does NOT make the model emit
     # faster; informational only, kept so config reviewers see the
-    # design assumption (conservative).
+    # design assumption (conservative). 100 Hz pacing now lives on NX
+    # motor_controller (CONV-006 REVISED).
     chunk_emit_rate_hz: float = 15.0
-    step_replay_rate_hz: float = 100.0       # NX motor loop rate
     # GearSonic balance-correction stage (CONV-007 — spec deferred).
     gearsonic_enabled: bool = True           # identity passthrough until wired
     gearsonic_device: Literal["cuda:0", "cuda:1", "cpu"] = "cuda:0"
@@ -104,9 +111,11 @@ class VLAProvider:
     Provider, requests an ``action_horizon``-step action chunk from the
     model server (default 16 per KIST fine-tune; NVIDIA example default
     8, source TBD), passes the chunk through the GearSonic
-    balance-correction stage (CONV-007), then unpacks the chunk into
-    step-level JointCmd messages at 100 Hz for the UnitreeG1 Provider
-    publish path. CONV-006 is the canonical wording for these rates.
+    balance-correction stage (CONV-007), splits the chunk's 29-DoF action
+    across arm/low frozensets, and publishes two ``JointCmdChunk`` DDS
+    messages via the UnitreeG1 Provider. NX motor_controller paces the
+    100 Hz step pop + crossfade. CONV-006 REVISED is the canonical wording
+    for the wire format and rates.
     """
 
     def __init__(self, config: Optional[VLAConfig] = None):
@@ -117,8 +126,8 @@ class VLAProvider:
             Runtime configuration. Defaults to GR00T N1.7,
             ``action_horizon=16`` (KIST config; NVIDIA example default
             is 8 — source TBD), assumed ~15 Hz chunk emission
-            (KIST L40 ~63.9 ms / chunk, RTX 4090 unmeasured — TBD),
-            100 Hz step replay, GearSonic enabled. See CONV-006.
+            (KIST L40 ~63.9 ms / chunk, RTX 4090 unmeasured — TBD).
+            GearSonic enabled. See CONV-006 REVISED.
         """
         self._config = config or VLAConfig()
         self._running = False
@@ -133,11 +142,11 @@ class VLAProvider:
         self._estop_active = False
         logging.info(
             "VLAProvider: skeleton initialized (backend=%s, server=%s, "
-            "chunk_hz=%.1f, replay_hz=%.1f, gearsonic=%s)",
+            "chunk_hz=%.1f, action_horizon=%d, gearsonic=%s)",
             self._config.backend.value,
             self._config.model_server_url,
             self._config.chunk_emit_rate_hz,
-            self._config.step_replay_rate_hz,
+            self._config.action_horizon,
             self._config.gearsonic_enabled,
         )
 
@@ -145,20 +154,23 @@ class VLAProvider:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
-        """Connect to the KIST Model Server, subscribe E-STOP, spawn replay worker."""
+        """Connect to the KIST Model Server + subscribe E-STOP.
+
+        No 100 Hz worker thread here anymore — NX motor_controller paces
+        the wire output (CONV-006 REVISED). ``infer()`` is the only path
+        that emits chunks, called from the asyncio runtime as VLA
+        inferences complete (~15 Hz).
+        """
         # TODO(REQ-39) [TASK-40]: open gRPC/HTTP client to model server
         # TODO(REQ-43) [TASK-40]: load GearSonic model (if local) or open
         #                         RPC to the remote device (if separate)
         # TODO(REQ-39) [TASK-40]: self._unitree_g1.register_estop_callback(self._on_estop)
-        # TODO(REQ-31) [TASK-40]: spawn step-replay worker thread @ 100 Hz
-        #     (see policy TODOs below for empty-queue / crossfade / preemption /
-        #     arm-low split)
         raise NotImplementedError("VLAProvider.start: TBD [TASK-40]")
 
     def stop(self) -> None:
-        """Cancel in-flight inference, drain replay queue, close clients."""
+        """Cancel in-flight inference, close clients."""
         # TODO(REQ-39) [TASK-40]: unregister_estop_callback, cancel request,
-        #                         join worker, close client
+        #                         close client
         raise NotImplementedError("VLAProvider.stop: TBD [TASK-40]")
 
     # ------------------------------------------------------------------
@@ -166,8 +178,8 @@ class VLAProvider:
     # ------------------------------------------------------------------
     async def infer(self, sub_task_prompt: str) -> int:
         """
-        Request one VLA chunk for ``sub_task_prompt`` and enqueue its
-        steps for the 100 Hz replay loop.
+        Request one VLA chunk for ``sub_task_prompt`` and publish it as
+        two ``JointCmdChunk`` DDS messages (arm + low).
 
         Observation (camera + joint state + IMU) is read live from the
         UnitreeG1 Provider — callers do NOT pass it in. This keeps the
@@ -184,10 +196,10 @@ class VLAProvider:
         int
             ``chunk_id`` assigned to the resulting chunk. The chunk
             contains ``self._config.action_horizon`` steps (currently
-            16 per KIST config — see CONV-006; NVIDIA example default
-            is 8, source TBD); ``step_index`` runs
-            ``0..action_horizon-1`` inside the chunk. Step-level
-            JointCmd messages will carry ``(chunk_id, step_index)``.
+            16 per KIST config — see CONV-006 REVISED; NVIDIA example
+            default is 8, source TBD). Per-step ``step_index`` on
+            ``JointCmd`` is retained for trace/log; NX
+            ``motor_controller`` paces the steps at 100 Hz.
         """
         # TODO(REQ-31) [TASK-40]: snapshot obs from UnitreeG1 Provider
         # TODO(REQ-39) [TASK-40]: send (prompt, obs) to KIST Model Server
@@ -195,37 +207,36 @@ class VLAProvider:
         # TODO(REQ-43) [TASK-40]: pipe chunk through GearSonic stage
         # TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER
         #                         GearSonic per pipeline order lock
-        # TODO(REQ-31) [TASK-40]: enqueue action_horizon steps (currently 16
-        #                         per CONV-006) with new chunk_id; the replay
-        #                         loop publishes them at 100 Hz
+        # TODO(REQ-31) [TASK-40]: call self._publish_chunk(chunk, chunk_id)
+        #                         to split arm/low and emit two
+        #                         JointCmdChunk DDS messages.
         raise NotImplementedError("VLAProvider.infer: TBD [TASK-40]")
 
     def cancel_chunk(
         self, reason: Literal["prompt change", "estop"] = "prompt change"
     ) -> None:
         """
-        Drop the currently replaying chunk.
+        Stop emitting new chunks; behaviour depends on ``reason``.
 
-        Two semantics depending on ``reason``:
+        Two semantics:
 
         - ``"prompt change"`` (default — TaskSrvProvider switches sub-task):
-          flush the replay queue and **hold the last published JointCmd**
-          (re-publish at 100 Hz so NX keeps the current pose). The next
-          ``infer()`` will overwrite this with fresh steps.
+          just stop calling ``infer()``. NX motor_controller's empty-queue
+          policy holds the last step automatically (republish at 100 Hz
+          until the next chunk arrives). PC has nothing to do here beyond
+          gating future inference.
 
-        - ``"estop"`` (E-STOP callback): flush the replay queue and
-          **publish a ``Damp`` LocoCommand** via UnitreeG1 — Unitree's
-          deterministic damp behaviour is the safe rest state. Do NOT
-          rely on hold-last-pose for E-STOP.
+        - ``"estop"`` (E-STOP callback): publish a ``Damp`` LocoCommand
+          via UnitreeG1 — Unitree's deterministic damp behaviour is the
+          safe rest state. Do NOT rely on hold-last-pose for E-STOP: a
+          mid-reach pose held indefinitely is unsafe.
 
-        The two paths exist to avoid a footgun: holding the last
-        VLA-produced pose during E-STOP can sustain an unsafe joint
-        configuration (e.g. arm mid-reach); Damp puts the robot in a
-        known-safe state.
+        Mid-chunk preemption on the wire is handled by NX
+        ``motor_controller``: when a new chunk arrives with a different
+        ``chunk_id``, NX drops the remaining tail of the previous chunk
+        and crossfades into the new one (CONV-006 REVISED).
         """
-        # TODO(REQ-31) [TASK-40]: flush replay queue
-        # TODO(REQ-31) [TASK-40]: if reason == "prompt change": switch worker
-        #                         to "republish last step" mode
+        # TODO(REQ-31) [TASK-40]: gate future infer() (set internal flag)
         # TODO(REQ-31) [TASK-40]: if reason == "estop":
         #                         self._unitree_g1.publish_loco_cmd({"name":"Damp"})
         raise NotImplementedError("VLAProvider.cancel_chunk: TBD [TASK-40]")
@@ -275,34 +286,36 @@ class VLAProvider:
         return chunk  # identity passthrough placeholder
 
     # ------------------------------------------------------------------
-    # Internals — chunk → step unpack (CONV-006 canonical)
+    # Internals — chunk publish (CONV-006 REVISED canonical)
     #
-    # Replay-worker policy decisions (LOCKED for the demo — implementer to
-    # follow):
-    #   - Empty queue (underflow): re-publish the last step at 100 Hz to
-    #     hold the pose; do NOT silently stop publishing.
-    #   - Chunk N → N+1 crossfade: 2-step linear blend between the last
-    #     step of N and the first step of N+1 (≈20 ms blend at 100 Hz).
-    #     PC-side per CONV-006; NX queue_aggregate stays OFF.
-    #   - Mid-chunk preemption: new infer() arriving while N is mid-replay
-    #     drops the rest of N immediately and the crossfade above blends
-    #     from the last-published step into N+1's first step (so the
-    #     crossfade rule applies whether the previous chunk was fully or
-    #     partially consumed).
-    #   - arm vs low split: each step's 29-DoF joint set is partitioned
-    #     into the IF-6 arm subset (publish_joint_cmd_arm) and the
-    #     2026-05-22 lower-body subset (publish_joint_cmd_low) using the
-    #     _ARM_JOINTS / _LOW_JOINTS frozensets to be defined per the ICD.
+    # Chunk-handling policy split between PC and NX (LOCKED for the demo):
+    #   1. Empty queue (underflow) → NX motor_controller republishes the
+    #      last popped step at 100 Hz to hold pose. PC no longer responsible.
+    #   2. Chunk N → N+1 crossfade → NX ``queue_aggregate.crossfade()``
+    #      (default ON) on chunk_id transition. PC no longer responsible.
+    #   3. Mid-chunk preemption → NX detects chunk_id transition while
+    #      previous chunk is still draining → drop the tail of the old
+    #      chunk and crossfade into the new one. PC just publishes the
+    #      new chunk normally.
+    #   4. arm vs low split → REMAINS ON PC. The chunk's 29-DoF joint set
+    #      is partitioned into the IF-6 arm subset
+    #      (publish_joint_chunk_arm) and the 2026-05-22 lower-body subset
+    #      (publish_joint_chunk_low) using _ARM_JOINTS / _LOW_JOINTS
+    #      frozensets to be defined per the ICD.
     # ------------------------------------------------------------------
-    def _enqueue_chunk_steps(self, chunk: Any, chunk_id: int) -> None:
+    def _publish_chunk(self, chunk: Any, chunk_id: int) -> None:
         """
-        Unpack an ``action_horizon``-step chunk (currently 16 per
-        CONV-006) into the 100 Hz replay queue.
+        Split a 29-DoF ``action_horizon``-step chunk (currently 16 per
+        CONV-006 REVISED) into arm + low halves and publish each as a
+        single ``JointCmdChunk`` DDS message.
 
-        Each enqueued step carries ``(chunk_id, step_index)`` so the NX
-        ``motor_controller`` ring-buffer can detect chunk boundaries for
-        the optional crossfade fallback (default OFF per CONV-006).
+        Both messages carry the same ``chunk_id``; NX motor_controller
+        uses it to detect chunk boundaries and trigger
+        ``queue_aggregate.crossfade()``.
         """
-        # TODO(REQ-31) [TASK-40]: implement per the policy block above
-        #     (underflow / crossfade / preemption / arm-low split).
-        raise NotImplementedError("VLAProvider._enqueue_chunk_steps: TBD [TASK-40]")
+        # TODO(REQ-31) [TASK-40]: partition chunk by _ARM_JOINTS / _LOW_JOINTS
+        # TODO(REQ-31) [TASK-40]: build two JointCmdChunk payloads
+        #     (header + chunk_id + steps[]) and call
+        #     self._unitree_g1.publish_joint_chunk_arm(...) /
+        #     self._unitree_g1.publish_joint_chunk_low(...).
+        raise NotImplementedError("VLAProvider._publish_chunk: TBD [TASK-40]")

@@ -165,40 +165,83 @@ Locomotion + manipulation are both driven by the **whole-body VLA**. NX
 
 ---
 
-## CONV-006 — Control loop @ 100 Hz step replay (VLA chunk @ ~15 Hz, assumed)
+## CONV-006 (REVISED 2026-05-26) — PC↔NX wire: chunk-as-wire, NX paces 100 Hz
 
-**Status**: Accepted · **Date**: 2026-05-22 (KIST mail)
+**Status**: Accepted · **Date**: 2026-05-26 (reverses 2026-05-16 step-as-wire decision)
 
 This file is the **canonical wording** for GR00T N1.7 chunk-size + emission-rate
 assumptions. Other docs / Notion pages cite this section verbatim.
 
 ### Context
+(This block reverses the 2026-05-16 step-as-wire decision; see Decision below.)
+The 2026-05-16 decision moved to step-as-wire on the grounds that chunk-level
+safety validation would be stale by the time later steps executed. On
+review, safety_monitor performs step-level validation regardless of wire
+unit, so the staleness argument does not apply to the wire format. Meanwhile
+the four chunk-handling policies (empty-queue last-step republish, chunk
+N→N+1 crossfade, mid-chunk preemption, arm/low split) naturally belong with
+the real-time loop. Pinning them on PC put Python+GIL on a 100 Hz
+precision-timer path, while leaving the already-implemented NX
+`queue_aggregate.crossfade()` dormant.
+
 KIST requires ≥ 100 Hz low-level control. GR00T N1.7 chunk-emission rate
 is **assumed ~15 Hz** based on a KIST L40 measurement (~63.9 ms / chunk,
 ~15.6 Hz; source TBD). **RTX 4090 is not measured** — NVIDIA-published
 numbers give H100 TensorRT 27.9 ms / 35.9 Hz and RTX 5090 50-80 Hz; with
 TensorRT applied on the 4090 we should expect 30-50 Hz. Our 15 Hz is a
-**conservative assumption**, not a verified spec. Misreading the chunk
-emission rate as "100 Hz VLA inference" led to wrong REQ wording
-(corrected 2026-05-22).
+**conservative assumption**, not a verified spec. The `action_horizon`
+default is 16 per KIST fine-tune choice; NVIDIA's public example default
+is 8 (source for KIST's 16 TBD).
 
 ### Decision
-- **VLA chunk emission**: ~15 Hz assumed (KIST L40 ~63.9 ms / chunk, source
-  TBD; RTX 4090 unmeasured — TensorRT 30-50 Hz plausible). Measure on the
-  actual 4090 demo rig before final tuning.
-- **Step replay**: chunks unpacked into `action_horizon` step-level JointCmd
-  messages (currently `action_horizon = 16` per KIST fine-tune choice;
-  NVIDIA's public example default is 8 — source TBD) at **100 Hz** (NX
-  motor loop rate).
-- **Motor control loop**: 100 Hz / 10 ms tick on NX `motor_controller`.
-- **E-STOP path**: ≤ 200 ms regardless.
+- PC `VLAProvider` produces a full action chunk per inference
+  (`action_horizon` step, currently 16), splits 29-DoF action by arm/low
+  frozensets, and publishes each half as a SINGLE `JointCmdChunk` DDS
+  message on `/bridge/cmd/arm` and `/bridge/cmd/low`.
+- PC does NOT pace 100 Hz. PC publishes whenever VLA inference finishes
+  (~15 Hz on KIST L40 measurement, RTX 4090 untested).
+- NX `motor_controller` receives `JointCmdChunk`, pushes each step into
+  `joint_buf`, pops at 100 Hz, and applies
+  `queue_aggregate.crossfade()` (default ON) on chunk boundaries.
+- 5/22 KIST mail "G1 = sensors/actuator collection" still respected — NX
+  motor_controller responsibility grows by ~50 LoC of chunk handling. No
+  inference or planning added on NX.
+
+#### Wire format
+- NEW message: `g1_onboard_msgs/JointCmdChunk.msg`
+
+  ```
+  std_msgs/Header header
+  uint32 chunk_id        # wrap rule: skip 0 on overflow
+  JointCmd[] steps       # length = action_horizon, currently 16
+  ```
+
+- `JointCmd.msg` unchanged. `step_index` field on `JointCmd` remains useful
+  for trace/log; `chunk_id` duplicated for self-contained logging.
+- Topics `/bridge/cmd/arm` and `/bridge/cmd/low` carry `JointCmdChunk` now.
 
 ### Consequences
-- ✅ KIST 100 Hz requirement met without requiring a 100 Hz VLA model.
-- ⚠️ Receding-horizon: ~6-7 steps of every chunk get replayed before the
-  next chunk arrives (assuming ~15 Hz emission; would shrink to ~3 steps
-  at 30 Hz, i.e. 100 Hz / emission rate). The rest are overwritten.
-  Crossfade handled at PC VLA Provider side.
+- ✅ Real-time logic (pacing, crossfade, empty-queue handling) lives in
+  the real-time loop (NX motor_controller).
+- ✅ PC `VLAProvider` simplifies to "split + 2 publishes" — no Python GIL
+  pacing concern.
+- ✅ Onboard `queue_aggregate.crossfade()` promoted from dormant fallback
+  to canonical crossfade path (default ON).
+- ⚠️ One new wire message (`JointCmdChunk`). IDL surface +1.
+- ⚠️ Mid-chunk preemption: when a new chunk arrives before previous chunk
+  drains, NX must detect `chunk_id` transition → trigger crossfade and
+  drop remaining tail of previous chunk. Implementation lives in
+  `motor_controller_node` + `queue_aggregate`.
+
+### Affected
+- workstation `src/providers/vla_provider.py` (simplify chunk handling)
+- workstation `src/providers/unitree_g1_provider.py` (`publish_joint_chunk` API)
+- onboard `src/motor_controller/motor_controller/motor_controller_node.py`
+  (chunk subscription + chunk_id boundary detection)
+- onboard `src/motor_controller/motor_controller/queue_aggregate.py`
+  (no code change; docstring promotes from fallback to canonical)
+- onboard `src/g1_onboard_msgs/msg/JointCmdChunk.msg` (NEW) +
+  `src/g1_onboard_msgs/CMakeLists.txt`
 
 ---
 

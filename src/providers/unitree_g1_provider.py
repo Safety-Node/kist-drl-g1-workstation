@@ -19,10 +19,10 @@ Subscribes (BestEffort unless noted):
   /bridge/safety/estop               g1_onboard_msgs/EstopFlag       [Reliable]
 
 Publishes (Reliable):
-  /bridge/cmd/arm        g1_onboard_msgs/JointCmd     rt/arm_sdk, IF-6
-  /bridge/cmd/low        g1_onboard_msgs/JointCmd     rt/lowcmd, NEW 2026-05-22
-  /bridge/cmd/loco       g1_onboard_msgs/LocoCommand  StandUp/Damp/SitDown
-  /bridge/cmd/audio_out  g1_onboard_msgs/AudioPCM     TTS playback
+  /bridge/cmd/arm        g1_onboard_msgs/JointCmdChunk  rt/arm_sdk, IF-6 (CONV-006 REVISED)
+  /bridge/cmd/low        g1_onboard_msgs/JointCmdChunk  rt/lowcmd, NEW 2026-05-22 (CONV-006 REVISED)
+  /bridge/cmd/loco       g1_onboard_msgs/LocoCommand    StandUp/Damp/SitDown
+  /bridge/cmd/audio_out  g1_onboard_msgs/AudioPCM       TTS playback
 
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
 (navigation pkg removed 2026-05-22).
@@ -72,11 +72,18 @@ class TopicCache:
 
 
 # Outbound command payload shapes. TypedDict gives pyright / IDE help at
-# call sites (VLA Provider's chunk → step unpack, MoveConnector's loco
-# dispatch) without the runtime cost of a Pydantic model — DDS serialisation
-# does the final validation.
+# call sites (VLA Provider's chunk split, MoveConnector's loco dispatch)
+# without the runtime cost of a Pydantic model — DDS serialisation does
+# the final validation.
 class JointCmd(TypedDict):
-    """Per-step joint command (IF-6 upper body / NEW 2026-05-22 lower body)."""
+    """
+    Per-step joint command (IF-6 upper body / NEW 2026-05-22 lower body).
+
+    In-process shape for one step inside a ``JointCmdChunk``. The wire
+    no longer carries single-step ``JointCmd`` for VLA — chunks are the
+    unit (CONV-006 REVISED 2026-05-26). ``step_index`` is retained for
+    trace/log, ``chunk_id`` for self-contained per-step logging.
+    """
 
     joint_names: List[str]
     q: List[float]
@@ -90,9 +97,23 @@ class JointCmd(TypedDict):
     # SDK-version-specific. Promote to ``Literal[...]`` once locked.
     mode: int
     weight: float          # respected on arm path; ignored on low path
-    chunk_id: int          # CONV-006 chunk boundary detection on NX
-    step_index: int        # 0..action_horizon-1 within the current chunk window
-                           # (action_horizon = 16 per current CONV-006 config)
+    chunk_id: int          # duplicated on each step for self-contained logging
+    step_index: int        # 0..action_horizon-1 within the chunk (trace/log)
+
+
+class JointCmdChunk(TypedDict):
+    """
+    Action chunk wire payload (CONV-006 REVISED 2026-05-26).
+
+    Mirrors ``g1_onboard_msgs/JointCmdChunk.msg``. The PC VLAProvider
+    builds one of these per arm/low half per inference; NX
+    ``motor_controller`` unpacks ``steps`` into its 100 Hz ring buffer
+    and applies ``queue_aggregate.crossfade()`` on ``chunk_id``
+    transitions.
+    """
+
+    chunk_id: int          # wrap rule: skip 0 on overflow
+    steps: List[JointCmd]  # length = action_horizon, currently 16
 
 
 class LocoCommand(TypedDict):
@@ -236,10 +257,11 @@ class UnitreeG1Provider:
         """
         Latest ``/bridge/motor/buf_state`` (motor ring buffer telemetry).
 
-        Consumer (TBD): VLA Provider should poll this to detect ring-buffer
-        near-empty and proactively re-trigger ``infer()`` so the step-replay
-        queue never underflows during the current chunk window
-        (``action_horizon`` steps — currently 16 per CONV-006).
+        Consumer (TBD): VLA Provider may poll this to detect NX ring-buffer
+        near-empty and proactively re-trigger ``infer()`` so the next chunk
+        lands before the previous one fully drains. Underflow itself is
+        handled by NX motor_controller (republish last step at 100 Hz —
+        CONV-006 REVISED).
         """
         return self._buf_state
 
@@ -321,25 +343,32 @@ class UnitreeG1Provider:
     # _schedule_coro) are fire-and-forget asyncio.Tasks and cannot retrieve
     # an exception raised here.
     # ------------------------------------------------------------------
-    def publish_joint_cmd_arm(self, joint_cmd: JointCmd) -> None:
+    def publish_joint_chunk_arm(self, chunk: JointCmdChunk) -> None:
         """
-        Publish a Joint Cmd Upper Body (rt/arm_sdk path) to ``/bridge/cmd/arm``.
+        Publish a ``JointCmdChunk`` (rt/arm_sdk path) to ``/bridge/cmd/arm``.
 
-        ICD IF-6. Weight respected on NX side (motor_cmd[29].q ramp).
+        CONV-006 REVISED 2026-05-26 — wire unit is the chunk, not the step.
+        NX motor_controller unpacks ``chunk.steps`` into ``joint_buf`` and
+        paces at 100 Hz. Weight respected on NX side
+        (motor_cmd[29].q ramp). ICD IF-6 (arm joint set) applies to
+        ``steps[i].joint_names``.
         """
         # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
-        # TODO(REQ-33) [TASK-41]: serialize JointCmd → g1_onboard_msgs/JointCmd, publish
-        raise NotImplementedError("UnitreeG1Provider.publish_joint_cmd_arm: TBD [TASK-41]")
+        # TODO(REQ-33) [TASK-41]: serialize JointCmdChunk → g1_onboard_msgs/JointCmdChunk, publish
+        raise NotImplementedError("UnitreeG1Provider.publish_joint_chunk_arm: TBD [TASK-41]")
 
-    def publish_joint_cmd_low(self, joint_cmd: JointCmd) -> None:
+    def publish_joint_chunk_low(self, chunk: JointCmdChunk) -> None:
         """
-        Publish a Joint Cmd Lower Body (rt/lowcmd path) to ``/bridge/cmd/low``.
+        Publish a ``JointCmdChunk`` (rt/lowcmd path) to ``/bridge/cmd/low``.
 
-        NEW 2026-05-22 (whole-body VLA walking). Weight ignored on NX side.
+        CONV-006 REVISED 2026-05-26 — wire unit is the chunk. NEW
+        2026-05-22 (whole-body VLA walking) topic; weight ignored on NX
+        side. NX motor_controller unpacks ``chunk.steps`` into
+        ``joint_buf`` and paces at 100 Hz.
         """
         # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
         # TODO(REQ-33) [TASK-41]: serialize + publish
-        raise NotImplementedError("UnitreeG1Provider.publish_joint_cmd_low: TBD [TASK-41]")
+        raise NotImplementedError("UnitreeG1Provider.publish_joint_chunk_low: TBD [TASK-41]")
 
     def publish_loco_cmd(self, loco_command: LocoCommand) -> None:
         """
