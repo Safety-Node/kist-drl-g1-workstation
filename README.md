@@ -5,7 +5,7 @@
 OpenMind OM1 fork for the PC (RTX 4090) running KIST G1 collaborative demo (2026).
 Speech I/O, VLA inference, task orchestration, GUI streaming.
 
-> Target HW: PC (Ubuntu 24.04, RTX 4090)
+> Target HW: PC (Ubuntu 22.04, RTX 4090)
 > Companion repo: `kist-drl-g1-onboard` (NX side — sensors / safety / motors)
 
 > 🚧 **Scaffold.** Most providers/connectors are still placeholders. Implementation
