@@ -2,7 +2,15 @@
   <Domain>
     <General>
       <Interfaces>
-        <NetworkInterface name="en0" priority="default" multicast="default" />
+        <!--
+          autodetermine: CycloneDDS picks the first non-loopback IPv4 interface
+          with multicast support. Avoids hard-coding macOS ("en0") vs Linux
+          ("eno1" / "enp3s0") naming; demo boxes can override via env:
+              CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces>
+                  <NetworkInterface name="ethX"/></Interfaces></General></Domain></CycloneDDS>'
+          (overrides the file URI per CycloneDDS docs).
+        -->
+        <NetworkInterface autodetermine="true" priority="default" multicast="default" />
       </Interfaces>
     </General>
     <Discovery>
