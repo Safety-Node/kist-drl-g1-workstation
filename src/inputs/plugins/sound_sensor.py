@@ -109,7 +109,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
 
     def stop(self) -> None:
         """Unregister STT callback, flush ring buffer."""
-        # TODO(REQ-44) [TASK-46]: STT Provider unregister (API TBD)
+        # TODO(REQ-44) [TASK-46]: self._stt.unregister_transcript_callback(self.on_transcript)
         # TODO(REQ-44) [TASK-46]: self._buffer.clear()
         # TODO(REQ-44) [TASK-46]: self._started = False
         raise NotImplementedError("SoundSensor.stop: TBD [TASK-46]")
@@ -121,17 +121,18 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         """
         Callback fired by STT Provider for each transcript.
 
+        ``event.is_final`` filtering is done STT-side (STTConfig.interim_results) —
+        we trust the event reaches us only when it should be acted on.
+
         Behaviour (when implemented):
-            1. Ignore non-final unless we explicitly want partials.
-            2. Drop below ``min_confidence`` if the event reports one
+            1. Drop if ``event.confidence`` is not None and < min_confidence
                (events without a score pass).
-            3. Strip + skip empty.
-            4. Dedupe against most recent within ``dedupe_window_s``
+            2. Strip + skip empty text.
+            3. Dedupe vs most recent within ``dedupe_window_s``
                (Google STT sometimes emits duplicate finals).
-            5. Append to ring buffer.
-            6. Forward to TaskSrvProvider.on_audio for keyword matching.
+            4. Append to ring buffer.
+            5. Forward to TaskSrvProvider.on_audio for keyword matching.
         """
-        # TODO(REQ-44) [TASK-46]: drop !event.is_final unless partials wanted
         # TODO(REQ-44) [TASK-46]: drop if event.confidence is not None and < min_confidence
         # TODO(REQ-44) [TASK-46]: strip + empty check on event.text
         # TODO(REQ-44) [TASK-46]: dedupe vs self._buffer[-1] within dedupe_window_s

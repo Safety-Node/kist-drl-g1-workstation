@@ -26,9 +26,12 @@ import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from .singleton import singleton
+
+if TYPE_CHECKING:
+    from .unitree_g1_provider import UnitreeG1Provider
 
 
 class STTBackend(str, Enum):
@@ -40,7 +43,15 @@ class STTBackend(str, Enum):
 
 
 class STTState(str, Enum):
-    """Connection state, surfaced via ``STTProvider.state`` for GUI display."""
+    """
+    Connection state, surfaced via ``STTProvider.state`` for GUI display.
+
+    Transitions:
+      start()            : IDLE → CONNECTING → STREAMING
+      gRPC stream error  : STREAMING → RECONNECTING → STREAMING
+                           (or → FAILED on max-retry exhaustion)
+      stop()             : any → IDLE
+    """
 
     IDLE = "idle"
     CONNECTING = "connecting"
@@ -66,8 +77,17 @@ class STTConfig:
     backend: STTBackend = STTBackend.GOOGLE_CLOUD
     language_code: str = "ko-KR"
     sample_rate_hz: int = 16000          # matches NX mic_node publish format
+    # interim_results filtering is the STT provider's sole responsibility:
+    # when False, only is_final=True events are emitted to subscribers
+    # (SoundSensor / GUI etc.). Downstream code does not re-filter.
     interim_results: bool = False
+    # Drop mic input N ms AFTER speaker_state.playing clears (trailing echo).
     echo_cancel_tail_ms: int = 200
+    # Drop mic input N ms BEFORE speaker_state.playing rises (leading edge):
+    # the DDS speaker_state hop trails actual audio by ~50-100 ms; bump if
+    # the demo shows self-transcribed TTS at utterance starts. Default 0
+    # because the conservative value depends on observed LAN latency.
+    echo_cancel_lead_ms: int = 0
 
 
 @singleton
@@ -81,7 +101,7 @@ class STTProvider:
         self._config = config or STTConfig()
         self._running = False
         self._state = STTState.IDLE
-        self._unitree_g1: Any = None  # bound by bind()
+        self._unitree_g1: Optional["UnitreeG1Provider"] = None  # bind() sets this
         self._callbacks: List[Callable[[TranscriptEvent], None]] = []
         self._callbacks_lock = threading.Lock()
         logging.info(
@@ -94,7 +114,7 @@ class STTProvider:
     # ------------------------------------------------------------------
     # Explicit dependency wiring (CONV-001)
     # ------------------------------------------------------------------
-    def bind(self, unitree_g1: Any) -> None:
+    def bind(self, unitree_g1: "UnitreeG1Provider") -> None:
         """Wire dependencies from run.py before ``start()``."""
         self._unitree_g1 = unitree_g1
 
@@ -103,9 +123,10 @@ class STTProvider:
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Open the STT streaming session and bind to UnitreeG1 audio + speaker_state."""
-        assert self._unitree_g1 is not None, (
-            "STTProvider.start: call bind(unitree_g1=...) first"
-        )
+        if self._unitree_g1 is None:
+            raise RuntimeError(
+                "STTProvider.start: call bind(unitree_g1=...) first"
+            )
         # TODO(REQ-27) [TASK-42]: unitree_g1.register_audio_callback(self._on_audio_chunk)
         # TODO(REQ-27) [TASK-42]: open gRPC bidi stream to Google Cloud Speech v2
         # TODO(REQ-27) [TASK-42]: spawn worker (audio push + transcript pull)
@@ -125,8 +146,13 @@ class STTProvider:
     ) -> None:
         """Append ``callback`` to the subscriber list (SoundSensor + GUI etc.)."""
         with self._callbacks_lock:
-            if callback not in self._callbacks:
-                self._callbacks.append(callback)
+            if callback in self._callbacks:
+                logging.debug(
+                    "STTProvider: callback %r already registered, skipping",
+                    getattr(callback, "__qualname__", callback),
+                )
+                return
+            self._callbacks.append(callback)
 
     def unregister_transcript_callback(
         self, callback: Callable[[TranscriptEvent], None]
