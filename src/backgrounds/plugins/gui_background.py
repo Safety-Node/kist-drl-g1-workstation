@@ -77,27 +77,35 @@ class GUIBackground(Background[GUIBackgroundConfig]):
         next_t = time.monotonic()
         logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
         # TODO(REQ-??) [TASK-47]: open encoder + display socket here.
-        while not self.should_stop():
-            try:
-                # TODO(REQ-??) [TASK-47]: read all provider state, compose
-                #     overlay onto color frame, push to display socket.
-                pass
-            except Exception:
-                logging.exception("GUIBackground: frame tick raised; continuing")
-            next_t += period
-            dt = next_t - time.monotonic()
-            if dt > 0:
-                if not self.sleep(dt):
-                    return  # stop_event fired during sleep
-            else:
-                # Overran the period; reset baseline to avoid tight-loop.
-                logging.warning(
-                    "GUIBackground: frame overran by %.1f ms; resetting baseline",
-                    -dt * 1000.0,
-                )
-                next_t = time.monotonic()
-        # TODO(REQ-??) [TASK-47]: close encoder + socket.
-        logging.info("GUIBackground: stream loop exited (stop signalled)")
+        # try/finally ensures cleanup runs whether the loop exits via
+        # should_stop() OR sleep() interruption — encoder + socket are
+        # OS resources (handles, ports), can't leak them on shutdown.
+        try:
+            while not self.should_stop():
+                try:
+                    # TODO(REQ-??) [TASK-47]: read all provider state, compose
+                    #     overlay onto color frame, push to display socket.
+                    pass
+                except Exception:
+                    logging.exception("GUIBackground: frame tick raised; continuing")
+                next_t += period
+                dt = next_t - time.monotonic()
+                if dt > 0:
+                    if not self.sleep(dt):
+                        return  # stop_event fired during sleep → finally runs
+                else:
+                    # Overran the period; reset baseline to avoid tight-loop.
+                    logging.warning(
+                        "GUIBackground: frame overran by %.1f ms; resetting baseline",
+                        -dt * 1000.0,
+                    )
+                    next_t = time.monotonic()
+        finally:
+            # TODO(REQ-??) [TASK-47]: close encoder + socket here. Must
+            #     execute on both stop-event-during-sleep AND natural
+            #     loop exit — that's why it's in finally, not after the
+            #     while.
+            logging.info("GUIBackground: stream loop exited (cleanup done)")
 
     def stop(self) -> None:
         """Base handles stop_event; encoder/socket teardown in run() after loop exit."""
