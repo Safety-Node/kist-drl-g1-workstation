@@ -16,11 +16,11 @@ Latency budget: ≤ 200 ms end-to-end to the wall display.
 Recording hook (TBD): mirror composite frames to disk for post-demo
 safety review.
 
-TODO(REQ-??) [TASK-47]: pick transport; implement composer + encoder.
-TODO(REQ-??) [TASK-47]: define overlay schema (scenario / sub-task / state
+TODO(REQ-41) [TASK-47]: pick transport; implement composer + encoder.
+TODO(REQ-41) [TASK-47]: define overlay schema (scenario / sub-task / state
                         badge / E-STOP banner / STT state / TTS indicator).
-TODO(REQ-??) [TASK-47]: recording sink to disk.
-TODO(REQ-??) [TASK-47]: optional STT live transcript via
+TODO(REQ-41) [TASK-47]: recording sink to disk.
+TODO(REQ-41) [TASK-47]: optional STT live transcript via
                         ``stt.register_transcript_callback`` for caption
                         overlay (push, not poll — characters per second).
 """
@@ -76,14 +76,14 @@ class GUIBackground(Background[GUIBackgroundConfig]):
         period = 1.0 / float(self.config.fps)
         next_t = time.monotonic()
         logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
-        # TODO(REQ-??) [TASK-47]: open encoder + display socket here.
+        # TODO(REQ-41) [TASK-47]: open encoder + display socket here.
         # try/finally ensures cleanup runs whether the loop exits via
         # should_stop() OR sleep() interruption — encoder + socket are
         # OS resources (handles, ports), can't leak them on shutdown.
         try:
             while not self.should_stop():
                 try:
-                    # TODO(REQ-??) [TASK-47]: read all provider state, compose
+                    # TODO(REQ-41) [TASK-47]: read all provider state, compose
                     #     overlay onto color frame, push to display socket.
                     pass
                 except Exception:
@@ -101,7 +101,7 @@ class GUIBackground(Background[GUIBackgroundConfig]):
                     )
                     next_t = time.monotonic()
         finally:
-            # TODO(REQ-??) [TASK-47]: close encoder + socket here. Must
+            # TODO(REQ-41) [TASK-47]: close encoder + socket here. Must
             #     execute on both stop-event-during-sleep AND natural
             #     loop exit — that's why it's in finally, not after the
             #     while.
