@@ -58,11 +58,17 @@ class _StubG1:
 
 
 class _StubConnector:
+    """
+    Stand-in for OM1 ActionConnector — exposes ``async connect(payload)``
+    matching the real ``ActionConnector[ActionConfig, MoveInput|SpeakInput]``
+    contract that ``TaskSrvProvider`` now calls canonically.
+    """
+
     def __init__(self):
         self.dispatched: List[str] = []
 
-    def dispatch(self, prompt: str) -> None:
-        self.dispatched.append(prompt)
+    async def connect(self, payload: Any) -> None:
+        self.dispatched.append(payload.action)
 
 
 def _simple_scenario(name="demo", trigger="hello", n_subtasks=2) -> Scenario:

@@ -432,34 +432,18 @@ class TaskSrvProvider:
                 sub_task.prompt,
             )
             return
-        # NOTE: OM1's MoveInput.action is typed MovementAction enum but the
+        # OM1 canonical action API: ActionConnector.connect(MoveInput(action=...))
+        # is async. MoveInput.action is typed MovementAction enum but the OM1
         # ros2 connector matches it as a string — we pass the VLA prompt as
         # the action string. MoveConnector implementation will adapt to the
         # whole-body VLA path (TASK-40); this just keeps the call site stable.
-        try:
-            self._move_connector.dispatch(sub_task.prompt)  # type: ignore[attr-defined]
-        except AttributeError:
-            # Fallback to the OM1 ActionConnector.connect() async API.
-            self._dispatch_via_connect(sub_task.prompt)
+        from actions.move.interface import MoveInput  # type: ignore
+
+        _schedule_coro(self._move_connector.connect(MoveInput(action=sub_task.prompt)))
         logging.info(
             "TaskSrvProvider: dispatched sub-task[%d] '%s'",
             self._active_sub_task_idx, sub_task.prompt,
         )
-
-    def _dispatch_via_connect(self, prompt: str) -> None:
-        """Bridge to OM1 ``ActionConnector.connect(MoveInput(action=...))``."""
-        # Local import to avoid a hard module-load dependency on actions.*
-        # for tests that stub the connector entirely.
-        from actions.move.interface import MoveInput  # type: ignore
-        import asyncio
-
-        coro = self._move_connector.connect(MoveInput(action=prompt))
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(coro)
-        except RuntimeError:
-            # No running loop (synchronous caller, e.g. tests) — best effort.
-            asyncio.run(coro)
 
     def _advance_sub_task(self) -> None:
         assert self._active_scenario is not None
@@ -496,18 +480,9 @@ class TaskSrvProvider:
         if self._speak_connector is None:
             logging.info("TaskSrvProvider: [speak] %s", phrase)
             return
-        try:
-            self._speak_connector.dispatch(phrase)  # type: ignore[attr-defined]
-        except AttributeError:
-            from actions.speak.interface import SpeakInput  # type: ignore
-            import asyncio
+        from actions.speak.interface import SpeakInput  # type: ignore
 
-            coro = self._speak_connector.connect(SpeakInput(action=phrase))
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                asyncio.run(coro)
+        _schedule_coro(self._speak_connector.connect(SpeakInput(action=phrase)))
 
     def _reset_active(self) -> None:
         self._active_scenario = None
@@ -574,3 +549,21 @@ def _joint_pos(state: Any, joint_name: str) -> Optional[float]:
 def _wrap_pi(angle: float) -> float:
     """Wrap ``angle`` to (-pi, pi]."""
     return (angle + math.pi) % (2 * math.pi) - math.pi
+
+
+def _schedule_coro(coro: Any) -> None:
+    """
+    Schedule an awaitable on the running loop, or run it synchronously
+    if there is no loop (the typical synchronous-test case).
+
+    This is the only bridge between the sync ``TaskSrvProvider`` API
+    surface and the async OM1 ``ActionConnector.connect()`` contract.
+    """
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+        return
+    loop.create_task(coro)
