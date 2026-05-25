@@ -36,6 +36,7 @@ refrigerator_pickup = Scenario(
         # ① 냉장고 앞 정렬
         SubTask(
             prompt="Walk to the refrigerator and face the door.",
+            narration="냉장고 앞으로 갑니다.",
             success=UwbPoseSuccess(
                 target=(2.10, -0.40, math.pi / 2),
                 tolerance_xy=0.20,
@@ -46,6 +47,7 @@ refrigerator_pickup = Scenario(
         # ② 냉장고 문 개방 (왼손 그리퍼가 열림 위치까지)
         SubTask(
             prompt="Open the refrigerator door with the left hand.",
+            narration="냉장고 문을 엽니다.",
             success=JointStateSuccess(
                 target_joint="left_gripper_finger_1",
                 target_pos=0.85,
@@ -56,6 +58,7 @@ refrigerator_pickup = Scenario(
         # ③ 오이 파지 (오른손 그리퍼가 잡힘 위치)
         SubTask(
             prompt="Pick up the cucumber from the top shelf.",
+            narration="오이를 집겠습니다.",
             success=JointStateSuccess(
                 target_joint="right_gripper_finger_1",
                 target_pos=0.20,
@@ -66,6 +69,7 @@ refrigerator_pickup = Scenario(
         # ④ 조리대 복귀 + tray 위 안착 (위치 + 오른손 release 동시 확인)
         SubTask(
             prompt="Return to the counter and place the cucumber on the tray.",
+            narration="조리대에 오이를 놓습니다.",
             success=CompositeSuccess(
                 children=[
                     UwbPoseSuccess(

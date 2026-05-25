@@ -127,10 +127,20 @@ class CompositeSuccess(SuccessCriterion):
 
 @dataclass
 class SubTask:
-    """One sub-task: a natural-language prompt + success criterion."""
+    """One sub-task: a natural-language prompt + success criterion.
+
+    ``prompt`` is the action string fed to the VLA Provider (typically English
+    so the model receives a stable instruction). ``narration`` is the optional
+    Korean line spoken on dispatch — kept separate because TTSConfig pins
+    ``ko-KR`` and reading the English prompt through the Korean voice would
+    sound jarring in a demo. When ``narration`` is None the dispatch is silent
+    (no SpeakConnector call); success / failure / cancel phrases still fire
+    from their respective terminal-state paths.
+    """
 
     prompt: str
     success: SuccessCriterion
+    narration: Optional[str] = None
 
 
 @dataclass
@@ -497,6 +507,11 @@ class TaskSrvProvider:
             self._finish_failure(reason="dispatch with no active sub-task")
             return
         self._sub_task_dispatch_ts = time.monotonic()
+        # Speak the Korean narration BEFORE dispatching the VLA prompt so the
+        # operator hears the announcement up front; the move happens during /
+        # after the speak (no blocking — both go through _schedule_coro).
+        if sub_task.narration:
+            self._speak(sub_task.narration)
         if self._move_connector is None:
             logging.warning(
                 "TaskSrvProvider: no MoveConnector bound; would dispatch '%s'",

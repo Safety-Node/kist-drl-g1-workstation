@@ -38,6 +38,16 @@ class TaskSrvBgConfig(BackgroundConfig):
             "(orchestrator restart policy decides what happens next)."
         ),
     )
+    heartbeat_every_ticks: int = Field(
+        default=50,                          # 5 s at the default 10 Hz tick
+        ge=0,
+        description=(
+            "Emit an INFO heartbeat (current TaskSrvProvider state + tick "
+            "counter) every N ticks. CONV-009: logs are the verification "
+            "surface — a silent loop is indistinguishable from a dead one. "
+            "Set to 0 to disable."
+        ),
+    )
 
 
 class TaskSrvBg(Background[TaskSrvBgConfig]):
@@ -67,6 +77,8 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
         self._task_srv = TaskSrvProvider()  # already-started singleton
         period = 1.0 / float(self.config.tick_rate_hz)
         next_t = time.monotonic()
+        tick_counter = 0
+        heartbeat_n = self.config.heartbeat_every_ticks
         logging.info(
             "TaskSrvBg: tick loop entering (period=%.3fs, swallow_exc=%s)",
             period, self.config.swallow_tick_exceptions,
@@ -80,6 +92,14 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
                 else:
                     logging.exception("TaskSrvBg: tick() raised; exiting loop")
                     return
+            tick_counter += 1
+            if heartbeat_n and tick_counter % heartbeat_n == 0:
+                logging.info(
+                    "TaskSrvBg: heartbeat tick=%d state=%s scenario=%s",
+                    tick_counter,
+                    self._task_srv.state.value,
+                    self._task_srv.active_scenario_name,
+                )
             next_t += period
             dt = next_t - time.monotonic()
             if dt > 0:
