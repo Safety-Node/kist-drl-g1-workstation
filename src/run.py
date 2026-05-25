@@ -44,7 +44,7 @@ import dotenv
 from actions.base import ActionConfig
 from actions.move.connector.move_connector import MoveConnector
 from actions.speak.connector.speak_connector import SpeakConnector
-from backgrounds.base import Background
+from backgrounds.base import Background, BackgroundConfig
 from backgrounds.plugins.gui_background import GUIBackground
 from backgrounds.plugins.task_srv_bg import TaskSrvBg, TaskSrvBgConfig
 from inputs.plugins.sound_sensor import SoundSensor, SoundSensorConfig
@@ -118,7 +118,7 @@ def _build_runtime() -> _Runtime:
     # Backgrounds
     rt.backgrounds = [
         TaskSrvBg(TaskSrvBgConfig()),
-        GUIBackground(__import__("backgrounds.base", fromlist=["BackgroundConfig"]).BackgroundConfig()),
+        GUIBackground(BackgroundConfig()),
     ]
     return rt
 
