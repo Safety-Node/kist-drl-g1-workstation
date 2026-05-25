@@ -177,6 +177,9 @@ class TaskSrvConfig:
     cancel_phrase: str = "취소했습니다."
     # Drop queued audio older than this when tick() finally dequeues it.
     # Prevents replay of stale transcripts after pause / resume. 0 disables.
+    # ASSUMES ts is time.monotonic() seconds (matches TranscriptEvent.ts
+    # contract in stt_provider.py). If a future change ships epoch
+    # timestamps everything goes stale silently — re-audit this check.
     stale_audio_s: float = 5.0
 
 
@@ -210,7 +213,9 @@ class TaskSrvProvider:
         # enqueue here and drain in tick() so all mutation of _state /
         # _active_scenario / _active_sub_task_idx happens on the TaskSrvBg
         # thread — keeps the provider single-threaded by design.
-        self._inbound: "queue.Queue[Tuple[str, Optional[float]]]" = queue.Queue()
+        # maxsize bounds OOM risk if TaskSrvBg dies (U1+U2); stale_audio_s
+        # already filters anything we might lose to put_nowait drops.
+        self._inbound: "queue.Queue[Tuple[str, Optional[float]]]" = queue.Queue(maxsize=32)
         logging.info(
             "TaskSrvProvider: skeleton initialized (tick=%.1fHz)",
             self._config.tick_rate_hz,
@@ -288,7 +293,13 @@ class TaskSrvProvider:
         if not self._running:
             logging.debug("TaskSrvProvider.on_audio: not running, ignoring")
             return
-        self._inbound.put((text, ts))
+        try:
+            self._inbound.put_nowait((text, ts))
+        except queue.Full:
+            logging.warning(
+                "TaskSrvProvider: inbound queue full (maxsize=%d); dropping '%s'",
+                self._inbound.maxsize, text,
+            )
 
     def _process_audio(self, text: str, ts: Optional[float]) -> None:
         """Single-threaded transcript handler (called from tick())."""
@@ -396,6 +407,13 @@ class TaskSrvProvider:
         SUCCESS / FAILED are transient — only observable for one tick before
         tick() clears them back to IDLE. GUI poller must run at
         ≥ ``TaskSrvBg.tick_rate_hz`` (default 10 Hz) to catch them.
+
+        Edge case: if a new trigger arrives on the same tick that SUCCESS
+        was set, the queue-drain step runs first and may transition
+        IDLE → ACTIVE before the GUI sees SUCCESS. Probability is small
+        (one tick window), but observers wanting completion-accurate
+        accounting should consume a separate event/log channel rather
+        than polling state.
         """
         return self._state
 
