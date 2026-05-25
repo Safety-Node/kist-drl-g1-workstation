@@ -3,7 +3,7 @@ name = "kist-drl-g1-workstation"
 version = "0.1.0"
 description = "KIST DRL — Unitree G1 PC Workstation Stack (OM1 fork)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10,<3.11"
 dependencies = [
     # Core OM1 framework (still used by our mini-runner)
     "json5==0.10.0",
@@ -58,7 +58,7 @@ dev = [
 
 [tool.black]
 line-length = 120
-target-version = ["py312"]
+target-version = ["py310"]
 include = '\.pyi?$'
 exclude = "(.venv)"
 

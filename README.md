@@ -36,18 +36,18 @@ Deferred (kept in repo as `[DEPRECATED]` only in spec; not implemented):
 ## Install
 
 PC requirements:
-- Ubuntu 24.04 (or 22.04)
-- ROS 2 jazzy (or humble — must match the NX onboard distro)
-- Python 3.12+ (managed via `uv`)
+- Ubuntu 22.04 (must match NX onboard distro)
+- ROS 2 humble (must match NX onboard distro per CONV-002)
+- Python 3.10 (Humble system Python; uv pinned to match — rclpy ABI is tied to the system Python minor version)
 
 ```bash
 # System deps
 sudo apt-get update && sudo apt-get install -y \
     portaudio19-dev python3-dev ffmpeg \
-    ros-jazzy-rmw-cyclonedds-cpp     # use ros-humble-... on Ubuntu 22.04
+    ros-humble-rmw-cyclonedds-cpp
 
-# ROS 2 — https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
-source /opt/ros/jazzy/setup.bash
+# ROS 2 — https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+source /opt/ros/humble/setup.bash
 export CYCLONEDDS_URI=file://$(pwd)/cyclonedds/cyclonedds.xml
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
