@@ -91,7 +91,8 @@ class JointCmd(TypedDict):
     mode: int
     weight: float          # respected on arm path; ignored on low path
     chunk_id: int          # CONV-006 chunk boundary detection on NX
-    step_index: int        # 0..15 within the 16-step chunk
+    step_index: int        # 0..action_horizon-1 within the current chunk window
+                           # (action_horizon = 16 per current CONV-006 config)
 
 
 class LocoCommand(TypedDict):
@@ -237,7 +238,8 @@ class UnitreeG1Provider:
 
         Consumer (TBD): VLA Provider should poll this to detect ring-buffer
         near-empty and proactively re-trigger ``infer()`` so the step-replay
-        queue never underflows during a 16-step chunk window.
+        queue never underflows during the current chunk window
+        (``action_horizon`` steps — currently 16 per CONV-006).
         """
         return self._buf_state
 

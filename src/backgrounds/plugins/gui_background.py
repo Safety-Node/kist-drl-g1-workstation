@@ -44,9 +44,11 @@ class GUIBackgroundConfig(BackgroundConfig):
         default=15.0,
         gt=0,
         description=(
-            "Composite-frame publish rate to the display. 15 Hz matches "
-            "VLA chunk emission and is enough for human-perceivable status; "
-            "bump for smoother camera video."
+            "Composite-frame publish rate to the display. 15 Hz default "
+            "matches the assumed VLA chunk emission rate (KIST L40 ~63.9 "
+            "ms / chunk, RTX 4090 unmeasured — TBD; see CONV-006) and is "
+            "enough for human-perceivable status; bump for smoother camera "
+            "video."
         ),
     )
     display_url: str = Field(

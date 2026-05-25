@@ -5,9 +5,12 @@ Vendor-agnostic VLA client. Default backend: NVIDIA GR00T N1.7 (3B) whole-body,
 served by KIST Model Server.
 
 - Whole-body locomotion + manipulation (CONV-005).
-- ~15 Hz chunk emission, 16-step chunks → 100 Hz step replay on PC (CONV-006).
-  JointCmd carries (chunk_id, step_index) so NX can detect chunk boundaries
-  for an optional crossfade fallback (default OFF — canonical crossfade is here).
+- ~15 Hz chunk emission (assumed — KIST L40 ~63.9 ms / chunk, RTX 4090
+  unmeasured; source TBD), `action_horizon`-step chunks (default 16 per
+  KIST fine-tune; NVIDIA example default 8) → 100 Hz step replay on PC
+  (CONV-006 is canonical). JointCmd carries (chunk_id, step_index) so NX
+  can detect chunk boundaries for an optional crossfade fallback
+  (default OFF — canonical crossfade is here).
 - GearSonic balance-correction lives inside this provider (CONV-007).
   Placement TBD (PC GPU / separate Jetson / NX); external interface stable.
 
@@ -67,12 +70,17 @@ class VLAConfig:
     # the sub-task (see TODO in module docstring); last-known chunk keeps
     # replaying during the retry window.
     request_timeout_s: float = 1.0
-    # Inference + replay rates (CONV-006).
-    action_horizon: int = 16                 # steps per chunk
+    # Inference + replay rates (CONV-006 — canonical wording).
+    # Steps per chunk. Currently 16 per KIST fine-tune choice (NVIDIA's
+    # public example default is 8 — source for KIST's 16 is TBD).
+    action_horizon: int = 16
     # GR00T model property — actual emission rate is set by model-server
-    # inference latency (~63.9 ms on L40 → ~15.6 Hz). Setting this value
-    # higher does NOT make the model emit faster; informational only,
-    # kept so config reviewers see the design assumption.
+    # inference latency: KIST L40 measured ~63.9 ms / chunk (~15.6 Hz,
+    # source TBD); RTX 4090 unmeasured. NVIDIA-published H100 TensorRT
+    # 27.9 ms / 35.9 Hz; with TensorRT applied on the 4090, 30-50 Hz is
+    # plausible. Setting this value higher does NOT make the model emit
+    # faster; informational only, kept so config reviewers see the
+    # design assumption (conservative).
     chunk_emit_rate_hz: float = 15.0
     step_replay_rate_hz: float = 100.0       # NX motor loop rate
     # GearSonic balance-correction stage (CONV-007 — spec deferred).
@@ -93,10 +101,12 @@ class VLAProvider:
     Default backend: KIST GR00T N1.7 Model Server (REQ-39). Consumes
     sub-task prompts from the Move Connector, bundles observation
     (camera + 29-DoF joint state + IMU base/ankle L/R) from the UnitreeG1
-    Provider, requests a 16-step action chunk from the model server,
-    passes the chunk through the GearSonic balance-correction stage
-    (CONV-007), then unpacks the chunk into step-level JointCmd messages
-    at 100 Hz for the UnitreeG1 Provider publish path.
+    Provider, requests an ``action_horizon``-step action chunk from the
+    model server (default 16 per KIST fine-tune; NVIDIA example default
+    8, source TBD), passes the chunk through the GearSonic
+    balance-correction stage (CONV-007), then unpacks the chunk into
+    step-level JointCmd messages at 100 Hz for the UnitreeG1 Provider
+    publish path. CONV-006 is the canonical wording for these rates.
     """
 
     def __init__(self, config: Optional[VLAConfig] = None):
@@ -104,8 +114,11 @@ class VLAProvider:
         Parameters
         ----------
         config : VLAConfig, optional
-            Runtime configuration. Defaults to GR00T N1.7, 15 Hz chunks,
-            100 Hz step replay, GearSonic enabled.
+            Runtime configuration. Defaults to GR00T N1.7,
+            ``action_horizon=16`` (KIST config; NVIDIA example default
+            is 8 — source TBD), assumed ~15 Hz chunk emission
+            (KIST L40 ~63.9 ms / chunk, RTX 4090 unmeasured — TBD),
+            100 Hz step replay, GearSonic enabled. See CONV-006.
         """
         self._config = config or VLAConfig()
         self._running = False
@@ -169,8 +182,11 @@ class VLAProvider:
         Returns
         -------
         int
-            ``chunk_id`` assigned to the resulting 16-step chunk. The
-            ``step_index`` runs 0..15 inside the chunk. Step-level
+            ``chunk_id`` assigned to the resulting chunk. The chunk
+            contains ``self._config.action_horizon`` steps (currently
+            16 per KIST config — see CONV-006; NVIDIA example default
+            is 8, source TBD); ``step_index`` runs
+            ``0..action_horizon-1`` inside the chunk. Step-level
             JointCmd messages will carry ``(chunk_id, step_index)``.
         """
         # TODO(REQ-31) [TASK-40]: snapshot obs from UnitreeG1 Provider
@@ -179,8 +195,9 @@ class VLAProvider:
         # TODO(REQ-43) [TASK-40]: pipe chunk through GearSonic stage
         # TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER
         #                         GearSonic per pipeline order lock
-        # TODO(REQ-31) [TASK-40]: enqueue 16 steps with new chunk_id; the
-        #                         replay loop publishes them at 100 Hz
+        # TODO(REQ-31) [TASK-40]: enqueue action_horizon steps (currently 16
+        #                         per CONV-006) with new chunk_id; the replay
+        #                         loop publishes them at 100 Hz
         raise NotImplementedError("VLAProvider.infer: TBD [TASK-40]")
 
     def cancel_chunk(
@@ -258,7 +275,7 @@ class VLAProvider:
         return chunk  # identity passthrough placeholder
 
     # ------------------------------------------------------------------
-    # Internals — chunk → step unpack (CONV-006)
+    # Internals — chunk → step unpack (CONV-006 canonical)
     #
     # Replay-worker policy decisions (LOCKED for the demo — implementer to
     # follow):
@@ -279,7 +296,8 @@ class VLAProvider:
     # ------------------------------------------------------------------
     def _enqueue_chunk_steps(self, chunk: Any, chunk_id: int) -> None:
         """
-        Unpack a 16-step chunk into the 100 Hz replay queue.
+        Unpack an ``action_horizon``-step chunk (currently 16 per
+        CONV-006) into the 100 Hz replay queue.
 
         Each enqueued step carries ``(chunk_id, step_index)`` so the NX
         ``motor_controller`` ring-buffer can detect chunk boundaries for

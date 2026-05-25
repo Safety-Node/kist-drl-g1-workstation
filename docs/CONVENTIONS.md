@@ -165,27 +165,40 @@ Locomotion + manipulation are both driven by the **whole-body VLA**. NX
 
 ---
 
-## CONV-006 — Control loop @ 100 Hz step replay (VLA chunk @ ~15 Hz)
+## CONV-006 — Control loop @ 100 Hz step replay (VLA chunk @ ~15 Hz, assumed)
 
 **Status**: Accepted · **Date**: 2026-05-22 (KIST mail)
 
+This file is the **canonical wording** for GR00T N1.7 chunk-size + emission-rate
+assumptions. Other docs / Notion pages cite this section verbatim.
+
 ### Context
-KIST requires ≥ 100 Hz low-level control. GR00T N1.7 chunk inference is
-~63.9 ms on L40 (≈15 Hz chunk emission, 16-step chunks). Misreading this
-as "100 Hz VLA inference" led to wrong REQ wording (corrected 2026-05-22).
+KIST requires ≥ 100 Hz low-level control. GR00T N1.7 chunk-emission rate
+is **assumed ~15 Hz** based on a KIST L40 measurement (~63.9 ms / chunk,
+~15.6 Hz; source TBD). **RTX 4090 is not measured** — NVIDIA-published
+numbers give H100 TensorRT 27.9 ms / 35.9 Hz and RTX 5090 50-80 Hz; with
+TensorRT applied on the 4090 we should expect 30-50 Hz. Our 15 Hz is a
+**conservative assumption**, not a verified spec. Misreading the chunk
+emission rate as "100 Hz VLA inference" led to wrong REQ wording
+(corrected 2026-05-22).
 
 ### Decision
-- **VLA chunk emission**: ~15 Hz (model property, fixed).
-- **Step replay**: chunks unpacked into 16 step-level JointCmd messages at
-  **100 Hz** (NX motor loop rate).
+- **VLA chunk emission**: ~15 Hz assumed (KIST L40 ~63.9 ms / chunk, source
+  TBD; RTX 4090 unmeasured — TensorRT 30-50 Hz plausible). Measure on the
+  actual 4090 demo rig before final tuning.
+- **Step replay**: chunks unpacked into `action_horizon` step-level JointCmd
+  messages (currently `action_horizon = 16` per KIST fine-tune choice;
+  NVIDIA's public example default is 8 — source TBD) at **100 Hz** (NX
+  motor loop rate).
 - **Motor control loop**: 100 Hz / 10 ms tick on NX `motor_controller`.
 - **E-STOP path**: ≤ 200 ms regardless.
 
 ### Consequences
 - ✅ KIST 100 Hz requirement met without requiring a 100 Hz VLA model.
 - ⚠️ Receding-horizon: ~6-7 steps of every chunk get replayed before the
-  next chunk arrives; the rest overwritten. Crossfade handled at PC VLA
-  Provider side.
+  next chunk arrives (assuming ~15 Hz emission; would shrink to ~3 steps
+  at 30 Hz, i.e. 100 Hz / emission rate). The rest are overwritten.
+  Crossfade handled at PC VLA Provider side.
 
 ---
 
