@@ -1,47 +1,45 @@
 [project]
-name = "om1"
-version = "1.0.1"
-description = "OM1 - a modern agent and robotics runtime system"
+name = "kist-drl-g1-workstation"
+version = "0.1.0"
+description = "KIST DRL — Unitree G1 PC Workstation Stack (OM1 fork)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "ultralytics==8.3.156",
-    "soundfile==0.13.1",
-    "sounddevice==0.5.2",
-    "pynmeagps==1.1.2",
-    "bleak==0.22.3",
-    "matplotlib==3.10.1",
+    # Core OM1 framework (still used by our mini-runner)
     "json5==0.10.0",
     "jsonschema==4.23.0",
-    "pycdr2==1.0.0",
-    "eclipse-zenoh==1.4.0",
-    "pyaudio==0.2.14",
-    "openai==1.60.1",
-    "pillow==12.2.0",
+    "pydantic>=2",
     "python-dotenv==1.2.2",
-    "typer==0.15.1",
-    "opencv-python==4.11.0.86",
-    "deepface==0.0.93",
-    "web3==7.6.0",
-    "numpy==1.26.4",
-    "cdp-sdk==1.40.0",
-    "hid==1.0.6",
+    "aiohttp==3.13.4",
+    "nest-asyncio==1.6.0",
+    # ROS 2 / DDS transport (CONV-002)
+    "pycdr2==1.0.0",
+    "eclipse-zenoh==1.4.0",        # OM1 internal loopback only (mode mgr, config provider)
     "cv_bridge==1.13.0.post0",
+    # Audio I/O (mic + speaker via STT/TTS providers)
+    "soundfile==0.13.1",
+    "sounddevice==0.5.2",
+    "pyaudio==0.2.14",
+    # Vision (camera frames for VLA + GUI)
+    "opencv-python==4.11.0.86",
+    "pillow==12.2.0",
+    "numpy==1.26.4",
+    # VLA inference (GR00T N1.7 client side)
     "torch==2.8.0",
     "torchvision==0.23.0",
-    "pyserial==3.5",
+    # GUI Background streaming
     "py-mjpeg==1.0.1",
     "fastapi==0.135.3",
     "uvicorn==0.34.0",
     "websockets==13.1",
+    # Misc
+    "matplotlib==3.10.1",
     "om1-modules @ git+https://github.com/OpenMind/om1-modules.git@5a8a633d08c3538f62ceba3dd36d5200c9eb0ca2",
-    "aiohttp==3.13.4",
-    "pynput==1.8.1",
-    "dimo-python-sdk @ git+https://github.com/openminddev/dimo-python-sdk.git@6b47fcd28654a4145cedee649a0999a8eb08a2f6",
-    "nest-asyncio==1.6.0",
-    "tf-keras==2.18.0",
-    "faiss-cpu==1.13.2",
-    "mcp==1.26.0",
+    # LLM Cortex revival prep (CONV-004): OM1 runtime/cortex.py + llm/ still
+    # import openai. Kept so the dormant LLM stack continues to import; not
+    # called from our run.py path.
+    "openai==1.60.1",
+    "typer==0.15.1",                # OM1 cli.py / scripts/generate_schema.py
 ]
 
 [project.optional-dependencies]
