@@ -14,6 +14,13 @@ Shutdown is reverse-order. SIGINT/SIGTERM trigger the stop event.
 
 Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
 (most provider backends are still NotImplementedError during scaffold).
+
+Use ``--scaffold-loop`` to keep the runtime alive in scaffold mode:
+Provider/SoundSensor ``.start()`` calls that raise NotImplementedError are
+logged + skipped instead of aborting. TaskSrvProvider (the only fully
+implemented Provider today) still starts normally so its tick loop +
+``on_audio`` queue actually run — useful for exercising the state machine
+end-to-end before the backends land.
 """
 
 import argparse
@@ -23,6 +30,14 @@ import sys
 import threading
 from pathlib import Path
 from typing import List, Optional, Protocol
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+# Make `config/` (project-root sibling of src/) importable. TaskSrvProvider
+# lazily imports ``config.scenarios.ALL`` in start(); Python's default sys.path
+# only contains src/ when running ``python src/run.py``, so the lazy import
+# would fail with ModuleNotFoundError without this prepend.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import dotenv
 
@@ -38,9 +53,6 @@ from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider
 from providers.tts_provider import TTSConfig, TTSProvider
 from providers.unitree_g1_provider import UnitreeG1Provider
 from providers.vla_provider import VLAConfig, VLAProvider
-
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Startable(Protocol):
@@ -122,18 +134,30 @@ def _build_runtime() -> _Runtime:
     return rt
 
 
-def _start_runtime(rt: _Runtime, dry_run: bool) -> None:
+def _start_component(component: Startable, scaffold_loop: bool) -> None:
+    """Call ``.start()`` on ``component``; swallow NotImplementedError in scaffold-loop mode."""
+    name = type(component).__name__
+    logging.info("Starting %s", name)
+    try:
+        component.start()
+    except NotImplementedError as e:
+        if not scaffold_loop:
+            raise
+        logging.warning("Scaffold-loop: skipping %s (%s)", name, e)
+
+
+def _start_runtime(rt: _Runtime, dry_run: bool, scaffold_loop: bool) -> None:
     """Call ``.start()`` on each component in dependency order."""
     if dry_run:
         logging.info("Dry run: skipping .start() on all components")
         return
 
     for p in rt.providers:
-        logging.info("Starting %s", type(p).__name__)
-        p.start()
+        _start_component(p, scaffold_loop)
 
     assert rt.task_srv is not None
     logging.info("Starting TaskSrvProvider (loads scenarios)")
+    # TaskSrvProvider.start() is implemented; no NotImplementedError to swallow.
     rt.task_srv.start()
 
     # Backgrounds before SoundSensor (R4): once SoundSensor.start()
@@ -147,8 +171,7 @@ def _start_runtime(rt: _Runtime, dry_run: bool) -> None:
         logging.info("Started background thread: %s", type(bg).__name__)
 
     assert rt.sound_sensor is not None
-    logging.info("Starting SoundSensor")
-    rt.sound_sensor.start()
+    _start_component(rt.sound_sensor, scaffold_loop)
 
 
 def _stop_runtime(rt: _Runtime) -> int:
@@ -202,6 +225,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Construct + wire components but do not call .start()",
     )
+    parser.add_argument(
+        "--scaffold-loop",
+        action="store_true",
+        help=(
+            "Keep the runtime alive in scaffold mode: Provider/SoundSensor "
+            ".start() calls that raise NotImplementedError are logged + "
+            "skipped (TaskSrvProvider still starts, tick loop runs). "
+            "SIGINT exits cleanly."
+        ),
+    )
     args = parser.parse_args(argv)
 
     _setup_logging(args.log_level)
@@ -221,10 +254,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         signal.signal(signal.SIGTERM, _on_signal)
 
     try:
-        _start_runtime(rt, dry_run=args.dry_run)
+        _start_runtime(rt, dry_run=args.dry_run, scaffold_loop=args.scaffold_loop)
     except NotImplementedError as e:
         logging.error("Component not yet implemented: %s", e)
-        logging.error("Use --dry-run to validate wiring without invoking .start()")
+        logging.error(
+            "Use --dry-run to validate wiring only, or --scaffold-loop to keep "
+            "TaskSrvProvider alive while skipping un-implemented backends."
+        )
         _stop_runtime(rt)
         return 1
     except Exception:
