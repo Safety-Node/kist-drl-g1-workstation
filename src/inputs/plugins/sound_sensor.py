@@ -59,16 +59,16 @@ any future Cortex-style consumer.
 
 ---
 
-TODO(REQ-NEW-TASKSRV) [TASK-46]: bind() -- accept STTProvider + TaskSrvProvider
+TODO(REQ-44) [TASK-46]: bind() -- accept STTProvider + TaskSrvProvider
                                  singletons resolved by run.py. Validate both
                                  are .started() before registering callback.
-TODO(REQ-NEW-TASKSRV) [TASK-46]: start() -- register on_transcript callback with
+TODO(REQ-44) [TASK-46]: start() -- register on_transcript callback with
                                  STT Provider, init recent-transcript ring buffer.
-TODO(REQ-NEW-TASKSRV) [TASK-46]: stop() -- unregister STT callback, flush buffer.
-TODO(REQ-NEW-TASKSRV) [TASK-46]: on_transcript(text, ts) -- ring-buffer append,
+TODO(REQ-44) [TASK-46]: stop() -- unregister STT callback, flush buffer.
+TODO(REQ-44) [TASK-46]: on_transcript(text, ts) -- ring-buffer append,
                                  confidence filter, dedupe, dispatch to
                                  TaskSrvProvider.on_audio(text, ts).
-TODO(REQ-NEW-TASKSRV) [TASK-46]: tests under tests/inputs/plugins/test_sound_sensor.py
+TODO(REQ-44) [TASK-46]: tests under tests/inputs/plugins/test_sound_sensor.py
                                  (stub STT Provider + stub TaskSrvProvider).
 """
 
@@ -161,7 +161,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
             push ``TranscriptEvent``s via ``task_srv.on_audio(text, ts)``
             (exact method name TBD when TaskSrvProvider lands).
         """
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: assert both providers are .started()
+        # TODO(REQ-44) [TASK-46]: assert both providers are .started()
         self._stt = stt
         self._task_srv = task_srv
 
@@ -170,16 +170,16 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Register transcript callback with STT Provider, ready buffer."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: validate bind() was called
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._started = True
+        # TODO(REQ-44) [TASK-46]: validate bind() was called
+        # TODO(REQ-44) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
+        # TODO(REQ-44) [TASK-46]: self._started = True
         raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")
 
     def stop(self) -> None:
         """Unregister STT callback, flush ring buffer."""
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: STT Provider unregister (API TBD)
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._buffer.clear()
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._started = False
+        # TODO(REQ-44) [TASK-46]: STT Provider unregister (API TBD)
+        # TODO(REQ-44) [TASK-46]: self._buffer.clear()
+        # TODO(REQ-44) [TASK-46]: self._started = False
         raise NotImplementedError("SoundSensor.stop: TBD [TASK-46]")
 
     # ------------------------------------------------------------------
@@ -196,10 +196,10 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
             3. Append to ring buffer.
             4. Forward to TaskSrvProvider for keyword scenario matching.
         """
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: strip + empty check
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: dedupe against self._buffer[-1] within dedupe_window_s
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._buffer.append(TranscriptEvent(text, ts))
-        # TODO(REQ-NEW-TASKSRV) [TASK-46]: self._task_srv.on_audio(text, ts)
+        # TODO(REQ-44) [TASK-46]: strip + empty check
+        # TODO(REQ-44) [TASK-46]: dedupe against self._buffer[-1] within dedupe_window_s
+        # TODO(REQ-44) [TASK-46]: self._buffer.append(TranscriptEvent(text, ts))
+        # TODO(REQ-44) [TASK-46]: self._task_srv.on_audio(text, ts)
         raise NotImplementedError("SoundSensor.on_transcript: TBD [TASK-46]")
 
     # ------------------------------------------------------------------

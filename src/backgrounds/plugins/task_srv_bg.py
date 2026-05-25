@@ -38,13 +38,13 @@ Keeping the polling loop **out** of the provider makes the provider:
 
 ---
 
-TODO(REQ-NEW-TASKSRV) [TASK-39]: resolve TaskSrvProvider singleton in run() (lazy)
-TODO(REQ-NEW-TASKSRV) [TASK-39]: rate-limited loop: time.monotonic() pacing so
+TODO(REQ-44) [TASK-39]: resolve TaskSrvProvider singleton in run() (lazy)
+TODO(REQ-44) [TASK-39]: rate-limited loop: time.monotonic() pacing so
                                   drift doesn't accumulate.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: on provider.tick() exception: log + continue
+TODO(REQ-44) [TASK-39]: on provider.tick() exception: log + continue
                                   (do not crash the BG, do not silently swallow).
-TODO(REQ-NEW-TASKSRV) [TASK-39]: stop() — let the current tick finish, exit loop.
-TODO(REQ-NEW-TASKSRV) [TASK-39]: tests under tests/backgrounds/plugins/test_task_srv_bg.py
+TODO(REQ-44) [TASK-39]: stop() — let the current tick finish, exit loop.
+TODO(REQ-44) [TASK-39]: tests under tests/backgrounds/plugins/test_task_srv_bg.py
                                   (stub provider with a counting tick()).
 """
 

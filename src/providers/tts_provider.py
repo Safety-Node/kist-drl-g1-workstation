@@ -23,7 +23,7 @@ drawio C4 Container:
     TTS Provider                                      (this class)
         ↓ publish_audio_out(pcm)                      ← UnitreeG1 Provider hook
     UnitreeG1 Provider                                (PC, TASK-41)
-        ↓ /bridge/audio/playback (g1_onboard_msgs/AudioPCM)
+        ↓ /bridge/cmd/audio_out (g1_onboard_msgs/AudioPCM, NX speaker_node sink)
     NX speaker_node                                   (Onboard)
 
 Resampling:
@@ -69,7 +69,8 @@ TODO(REQ-29) [TASK-43]: synthesize — POST text to Clova /tts endpoint with
 TODO(REQ-29) [TASK-43]: resample — 22050/24000 Hz → 16000 Hz mono int16
                         (PC responsibility per REQ-29 2026-05-15).
 TODO(REQ-29) [TASK-43]: publish — push PCM bytes to UnitreeG1 Provider so the
-                        NX speaker_node consumes /bridge/audio/playback.
+                        NX speaker_node consumes /bridge/cmd/audio_out
+                        (relayed onboard as /onboard/audio/playback).
 TODO(REQ-29) [TASK-43]: cancellation — E-STOP must interrupt in-flight HTTP
                         request and drain pending audio.
 TODO(REQ-29) [TASK-43]: sentence-segment streaming for low TTFB (target

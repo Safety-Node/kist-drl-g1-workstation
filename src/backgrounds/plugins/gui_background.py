@@ -1,6 +1,6 @@
 """
-GUI BackGround -- KIST DRL G1 Workstation
-=========================================
+GUI BackGround -- KIST DRL G1 Workstation [TASK-47]
+===================================================
 
 drawio C4 Container:
     Name        : GUI BackGround
