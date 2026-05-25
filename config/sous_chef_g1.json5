@@ -1,0 +1,114 @@
+// sous_chef_g1.json5 — KIST DRL G1 demo configuration ("주방보조 G1 로봇").
+//
+// G1 plays the **sous-chef** role in the KIST KAPEX-G1 collaborative demo:
+// KAPEX is the head chef on the cutting board, G1 fetches ingredients from
+// the refrigerator and hands them off. All three scenario phases (single
+// object → multi-object with occlusion → semantic substitution / parallel
+// collaboration) run from this single config; per-scenario logic lives in
+// config/scenarios/*.py (Python — not loaded from this file).
+//
+// Wiring status (2026-05-25, scaffold phase):
+//   src/run.py currently uses the dataclass defaults baked into each
+//   provider's *Config class. The intent of this file is to be the single
+//   place an operator changes demo parameters without editing Python.
+//   TODO(run): add `--config config/sous_chef_g1.json5` flag to run.py and
+//   apply key-by-key overrides to UnitreeG1Provider / STTConfig / TTSConfig
+//   / VLAConfig / TaskSrvConfig / TaskSrvBgConfig / SoundSensorConfig.
+//   Until then this file is documentation: the keys mirror the dataclass
+//   field names exactly so the wiring is mechanical.
+
+{
+  // ─── PC ↔ NX bridge — UnitreeG1Provider [TASK-41, REQ-32/33] ──────────
+  // rclpy + CycloneDDS direct (no Zenoh bridge daemon) per CONV-002.
+  // ros_domain_id must match the NX side; cyclonedds.xml selects the LAN
+  // interface (currently autodetermine=true so demo boxes do not need
+  // per-box edits).
+  unitree_g1: {
+    ros_domain_id: 0,
+    cyclonedds_uri: "file://cyclonedds/cyclonedds.xml",
+    comm_bridge_host: null,            // optional, diagnostics-only label
+    heartbeat_timeout_ms: 500,         // outbound cmds blocked after this
+    sensor_ttl_ms: 200,                // BestEffort topics: stale window
+    state_ttl_ms: 1000,                // Reliable topics:   stale window
+  },
+
+  // ─── Speech-to-Text — STTProvider [TASK-42, REQ-27] ───────────────────
+  // Vendor-agnostic; default backend = Google Cloud Speech-to-Text v2
+  // streaming. Korean acceptance is the demo requirement; sample rate is
+  // locked to the NX mic_node publish format (16 kHz / 16-bit / mono PCM,
+  // REQ-27 2026-05-15).
+  stt: {
+    backend: "google_cloud",           // "google_cloud" (only impl today)
+    language_code: "ko-KR",
+    sample_rate_hz: 16000,
+    interim_results: false,            // final transcripts only
+    echo_cancel_tail_ms: 200,          // ignore mic input N ms after TTS stops
+  },
+
+  // ─── Text-to-Speech — TTSProvider [TASK-43, REQ-29] ───────────────────
+  // Vendor-agnostic; default backend = Naver Clova Voice Premium REST.
+  // PC resamples 22050/24000 Hz Clova native → 16 kHz mono int16 before
+  // publishing to /bridge/cmd/audio_out (NX speaker_node format match).
+  tts: {
+    backend: "naver_clova",            // "naver_clova" (only impl today)
+    language_code: "ko-KR",
+    sample_rate_hz: 16000,             // wire format (post-resample)
+    voice: "nara",                     // Clova voice id (nara / mijin / nminyoung / ...)
+    speed: 0,                          // [-5, +5] Clova speed offset
+    sentence_streaming: false,         // split long text on sentence ends for lower TTFB
+  },
+
+  // ─── Vision-Language-Action — VLAProvider [TASK-40, REQ-31/39/43] ─────
+  // Vendor-agnostic; default backend = NVIDIA GR00T N1.7 (3B) served by
+  // KIST Model Server. Whole-body per CONV-005 (locomotion + manipulation
+  // in one model). CONV-006 timing: ~15 Hz chunk emission, 16-step chunks,
+  // unpacked on PC to 100 Hz step replay → NX motor loop. GearSonic seam
+  // (CONV-007, REQ-43) lives inside the provider; placement TBD.
+  vla: {
+    backend: "groot_n17",              // "groot_n17" (only impl today)
+    model_server_url: "http://localhost:8000",
+    model_server_protocol: "http",     // "http" | "grpc"
+    request_timeout_s: 1.0,
+    action_horizon: 16,                // steps per GR00T chunk
+    chunk_emit_rate_hz: 15.0,          // model property, fixed-ish
+    step_replay_rate_hz: 100.0,        // NX motor loop rate
+    gearsonic_enabled: true,           // identity passthrough until KIST spec lands
+    gearsonic_device: "cuda:0",        // "cuda:0" | "cuda:1" | "cpu" (TBD)
+    joint_delta_clip_rad: 0.25,        // safety envelope: reject larger deltas
+  },
+
+  // ─── Scenario orchestrator — TaskSrvProvider [TASK-39, REQ-44] ────────
+  // Replaces LLM Cortex per CONV-004. Scenarios are Python objects under
+  // config/scenarios/; this section configures *how* the orchestrator
+  // routes / times / speaks, not which scenarios exist.
+  task_srv: {
+    tick_rate_hz: 10.0,                // success-poll rate
+    case_insensitive_keywords: true,
+    enable_speak_feedback: true,
+    success_phrase: "성공했습니다.",
+    failure_phrase: "실패했습니다.",
+    cancel_phrase: "취소했습니다.",
+    // Cancel keywords (substring match) preempt an active scenario. Empty
+    // list disables preemption — the KIST MBO automatic recovery flow
+    // (retry once, then skip) is the only escape hatch in that case.
+    cancel_keywords: ["취소", "그만", "멈춰"],
+  },
+
+  // ─── Tick driver for the orchestrator — TaskSrvBg [TASK-39] ───────────
+  // Runs in a worker thread spawned by run.py; drives TaskSrvProvider.tick()
+  // at the configured rate so the provider stays single-threaded / testable.
+  task_srv_bg: {
+    tick_rate_hz: 10.0,                // should match or divide task_srv.tick_rate_hz
+    swallow_tick_exceptions: true,     // log+continue vs exit-on-error
+  },
+
+  // ─── STT transcript bridge — SoundSensor [TASK-46] ────────────────────
+  // Receives STT transcripts (push callback) and forwards to
+  // TaskSrvProvider.on_audio. min_confidence path is wired only if the
+  // STT backend exposes confidence scores (Google STT does optionally).
+  sound_sensor: {
+    buffer_size: 5,                    // recent-transcript ring buffer
+    min_confidence: 0.3,
+    dedupe_window_s: 1.5,              // drop identical transcript within window
+  },
+}
