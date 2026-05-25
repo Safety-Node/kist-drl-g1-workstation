@@ -91,6 +91,8 @@ class TTSProvider:
         # returns the configured instance, not a default-config singleton.
         self._unitree_g1 = UnitreeG1Provider()
         self._inflight_request = None  # cancellation handle for synth-in-progress
+        # Set True by _on_estop; gates synthesize() / drops new requests.
+        self._estop_active = False
         logging.info(
             "TTSProvider: skeleton initialized (backend=%s, lang=%s, voice=%s, rate=%d)",
             self._config.backend.value,
@@ -140,8 +142,15 @@ class TTSProvider:
     # Read-only state (polled by GUI BG)
     # ------------------------------------------------------------------
     @property
-    def is_speaking(self) -> bool:
-        """True while a synth → publish is in flight."""
+    def is_synthesizing(self) -> bool:
+        """
+        True while a synth request is in flight to the cloud TTS.
+
+        For "is the NX speaker actually emitting sound right now?", read
+        ``unitree_g1.speaker_state.value.playing`` instead — that flag is
+        raised by NX speaker_node based on actual audio playback, not by
+        PC-side synthesis status.
+        """
         return self._inflight_request is not None
 
     # ------------------------------------------------------------------
@@ -149,7 +158,7 @@ class TTSProvider:
     # ------------------------------------------------------------------
     def _on_estop(self, active: bool, ts: float) -> None:
         """E-STOP push callback. Cancel current synth; gate future synthesize()."""
-        # TODO(REQ-29) [TASK-43]: self._estop_active = active  (init in __init__ TBD)
+        # TODO(REQ-29) [TASK-43]: self._estop_active = active
         # TODO(REQ-29) [TASK-43]: if active: self.cancel()
         # TODO(REQ-29) [TASK-43]: synthesize() must early-return when E-STOP active
         raise NotImplementedError("TTSProvider._on_estop: TBD [TASK-43]")
