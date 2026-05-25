@@ -283,6 +283,43 @@ def test_on_audio_ignored_when_already_active():
     assert mv.dispatched == ["step 0"]
 
 
+def test_on_audio_picks_highest_priority_on_ambiguous_match():
+    """When two scenarios' triggers both substring-match, priority wins."""
+    mv = _StubConnector()
+    p = TaskSrvProvider()
+    p.bind(unitree_g1=_StubG1(), move_connector=mv)
+    low = Scenario(
+        name="low_pri",
+        triggers=["오이"],
+        sub_tasks=[
+            SubTask(
+                prompt="low",
+                success=JointStateSuccess(
+                    target_joint="j0", target_pos=1.0, tolerance=0.01, timeout_s=0.5
+                ),
+            )
+        ],
+        priority=0,
+    )
+    high = Scenario(
+        name="high_pri",
+        triggers=["오이 가져와"],
+        sub_tasks=[
+            SubTask(
+                prompt="high",
+                success=JointStateSuccess(
+                    target_joint="j0", target_pos=1.0, tolerance=0.01, timeout_s=0.5
+                ),
+            )
+        ],
+        priority=10,
+    )
+    p.start(scenarios=[low, high])
+    p.on_audio("냉장고에서 오이 가져와")  # both triggers match; high wins
+    assert p.active_scenario_name == "high_pri"
+    assert mv.dispatched == ["high"]
+
+
 def test_on_audio_no_match_keeps_idle():
     mv = _StubConnector()
     p = TaskSrvProvider()

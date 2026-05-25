@@ -199,6 +199,8 @@ class Scenario:
     name: str
     triggers: List[str]              # STT keyword phrases (substring match)
     sub_tasks: List[SubTask]
+    priority: int = 0                # higher wins on ambiguous trigger; ties
+                                     # broken by config.scenarios.ALL order
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +409,21 @@ class TaskSrvProvider:
         return index
 
     def _match_trigger(self, text: str) -> Optional[Scenario]:
+        """
+        Substring match against every registered trigger; highest
+        ``Scenario.priority`` wins. Ties are broken by insertion order
+        into ``config.scenarios.ALL`` (Python 3.7+ dict iteration is
+        insertion-ordered, and Python's sort is stable).
+        """
         haystack = text.lower() if self._config.case_insensitive_keywords else text
-        # Substring match; first hit wins.
+        matches: List[Scenario] = []
         for needle, scenario in self._trigger_index.items():
             if needle in haystack:
-                return scenario
-        return None
+                matches.append(scenario)
+        if not matches:
+            return None
+        matches.sort(key=lambda s: s.priority, reverse=True)
+        return matches[0]
 
     def _activate(self, scenario: Scenario) -> None:
         self._active_scenario = scenario
