@@ -258,6 +258,17 @@ class TaskSrvProvider:
             2. If a scenario is ACTIVE (and no cancel), the transcript
                is ignored — preemption is not allowed.
             3. Otherwise look up scenario triggers and activate on hit.
+
+        TODO(REQ-44) [TASK-39]: this is currently called from the STT
+        backend thread (gRPC worker) via SoundSensor.on_transcript, while
+        TaskSrvBg.tick() runs the success-poll loop on its own thread.
+        Both touch _state / _active_scenario / _active_sub_task_idx with
+        no lock — race conditions possible (e.g. two threads both see
+        IDLE and both call _activate). Provider is meant to be
+        single-threaded; preferred fix is to enqueue here and drain in
+        tick() (single thread keeps the design intent intact). Add a
+        ``queue.Queue`` field, push (text, ts) here, drain in tick()
+        before evaluating the success criterion.
         """
         if not self._running:
             logging.debug("TaskSrvProvider.on_audio: not running, ignoring")

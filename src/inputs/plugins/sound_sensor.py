@@ -13,8 +13,7 @@ TODO(REQ-44) [TASK-46]: on_transcript — dedupe + confidence filter + dispatch.
 """
 
 import logging
-from collections import deque
-from typing import Deque, Optional
+from typing import Optional
 
 from pydantic import Field
 
@@ -26,16 +25,14 @@ from providers.stt_provider import TranscriptEvent
 class SoundSensorConfig(SensorConfig):
     """Configuration for the Sound Sensor."""
 
-    buffer_size: int = Field(
-        default=5,
-        description="Number of recent transcripts to retain in the ring buffer.",
-    )
     min_confidence: float = Field(
         default=0.3,
         description=(
-            "Minimum STT confidence score to keep. Note: confidence is "
-            "optional in the STT Provider callback; transcripts without a "
-            "score are accepted unconditionally."
+            "Minimum STT confidence score to keep. Transcripts without a "
+            "score pass unconditionally. NOTE: 0.3 is permissive; tune "
+            "upward (0.5-0.7) after observing the actual STT confidence "
+            "distribution on the demo mic — Korean + ambient noise can "
+            "produce false-trigger near-homophones (e.g. 오이 ↔ 오리)."
         ),
     )
     dedupe_window_s: float = Field(
@@ -70,13 +67,15 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
 
     def __init__(self, config: SoundSensorConfig):
         super().__init__(config)
-        self._buffer: Deque[TranscriptEvent] = deque(maxlen=config.buffer_size)
+        # Dedupe needs only the last event, not a ring buffer; if a GUI
+        # transcript-history panel later wants N events, add buffer back
+        # then (YAGNI for now).
+        self._last_event: Optional[TranscriptEvent] = None
         self._stt = None        # set by bind()
         self._task_srv = None   # set by bind()
         self._started = False
         logging.info(
-            "SoundSensor: skeleton initialized (buffer=%d, min_conf=%.2f, dedupe_window=%.1fs)",
-            config.buffer_size,
+            "SoundSensor: skeleton initialized (min_conf=%.2f, dedupe_window=%.1fs)",
             config.min_confidence,
             config.dedupe_window_s,
         )
@@ -88,18 +87,20 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         """
         Wire dependencies after ``run.py`` has started both providers.
 
+        Per CONV-001 the caller (``run.py``) owns startup ordering — we
+        only check the references are non-None at ``start()`` time
+        (bound, not necessarily ``.started()``).
+
         Parameters
         ----------
         stt : STTProvider
-            Already-started STT Provider singleton. SoundSensor will call
-            ``stt.register_transcript_callback(self.on_transcript)``
-            in ``start()``.
+            STT Provider singleton. SoundSensor will call
+            ``stt.register_transcript_callback(self.on_transcript)`` in
+            ``start()``.
         task_srv : TaskSrvProvider
-            Already-started TaskSrvProvider singleton. SoundSensor will
-            push ``TranscriptEvent``s via ``task_srv.on_audio(text, ts)``
-            (exact method name TBD when TaskSrvProvider lands).
+            TaskSrvProvider singleton. SoundSensor pushes transcripts via
+            ``task_srv.on_audio(text, ts)``.
         """
-        # TODO(REQ-44) [TASK-46]: assert both providers are .started()
         self._stt = stt
         self._task_srv = task_srv
 
@@ -117,11 +118,16 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")
 
     def stop(self) -> None:
-        """Unregister STT callback, flush ring buffer."""
+        """Unregister STT callback, clear last-event."""
         # TODO(REQ-44) [TASK-46]: self._stt.unregister_transcript_callback(self.on_transcript)
-        # TODO(REQ-44) [TASK-46]: self._buffer.clear()
+        # TODO(REQ-44) [TASK-46]: self._last_event = None
         # TODO(REQ-44) [TASK-46]: self._started = False
         raise NotImplementedError("SoundSensor.stop: TBD [TASK-46]")
+
+    @property
+    def started(self) -> bool:
+        """True while the STT callback is registered (GUI status display)."""
+        return self._started
 
     # ------------------------------------------------------------------
     # STT → TaskSrvProvider bridge (primary path)
@@ -130,6 +136,14 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         """
         Callback fired by STT Provider for each transcript.
 
+        Threading note: this runs on the STT backend's response thread
+        (gRPC worker for Google STT). The forwarded ``task_srv.on_audio``
+        call mutates TaskSrvProvider state that ``TaskSrvBg.tick()`` also
+        touches — TaskSrvProvider is "single-threaded by design"
+        (CONV-001 + provider docstring) but currently has no lock. See
+        TODO at TaskSrvProvider.on_audio for the planned queue-deferral
+        fix (cross-thread call → enqueue → TaskSrvBg.tick drains).
+
         ``event.is_final`` filtering is done STT-side (STTConfig.interim_results) —
         we trust the event reaches us only when it should be acted on.
 
@@ -137,16 +151,20 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
             1. Drop if ``event.confidence`` is not None and < min_confidence
                (events without a score pass).
             2. Strip + skip empty text.
-            3. Dedupe vs most recent within ``dedupe_window_s``
+            3. Dedupe vs ``self._last_event`` within ``dedupe_window_s``
                (Google STT sometimes emits duplicate finals).
-            4. Append to ring buffer.
+            4. Update self._last_event.
             5. Forward to TaskSrvProvider.on_audio for keyword matching.
         """
         # TODO(REQ-44) [TASK-46]: drop if event.confidence is not None and < min_confidence
         # TODO(REQ-44) [TASK-46]: strip + empty check on event.text
-        # TODO(REQ-44) [TASK-46]: dedupe vs self._buffer[-1] within dedupe_window_s
-        # TODO(REQ-44) [TASK-46]: self._buffer.append(event)
+        # TODO(REQ-44) [TASK-46]: dedupe vs self._last_event within dedupe_window_s
+        # TODO(REQ-44) [TASK-46]: self._last_event = event
         # TODO(REQ-44) [TASK-46]: self._task_srv.on_audio(event.text, event.ts)
+        # TODO(REQ-44) [TASK-46]: log every drop with reason (confidence / empty / dedupe)
+        #                          — pytest is off (CONV-009), logs are the only
+        #                          debugging surface for "I said the keyword but
+        #                          nothing happened" during the demo.
         raise NotImplementedError("SoundSensor.on_transcript: TBD [TASK-46]")
 
     # ------------------------------------------------------------------
