@@ -1,34 +1,16 @@
 """
-KIST DRL G1 Workstation — entrypoint.
+KIST DRL G1 Workstation entrypoint (mini-runner per CONV-001).
 
-Explicit Provider lifecycle per CONV-001 (Option B mini-runner):
-the OM1 ``ModeCortexRuntime`` is bypassed since the KIST demo replaces
-the LLM Cortex with the scripted :class:`TaskSrvProvider`. This file is
-the single place to see startup order, wiring, and shutdown.
+Explicit Provider lifecycle: replaces OM1 ``ModeCortexRuntime`` since the
+KIST demo uses :class:`TaskSrvProvider` instead of an LLM Cortex (CONV-004).
 
-Startup order
--------------
-1.  ``UnitreeG1Provider``          — owns the ``/bridge/*`` DDS facade.
-2.  ``STTProvider``                — needs UnitreeG1 for audio_pcm + speaker_state.
-3.  ``TTSProvider``                — needs UnitreeG1 for audio playback publish.
-4.  ``VLAProvider``                — needs UnitreeG1 for camera + joint + IMU obs.
-5.  ``MoveConnector`` / ``SpeakConnector`` (plain ActionConnector instances).
-6.  ``TaskSrvProvider``            — bound to (UnitreeG1, Move, Speak), loads scenarios.
-7.  ``SoundSensor``                — bound to (STT, TaskSrv), registers STT callback.
-8.  Backgrounds: ``TaskSrvBg`` + ``GUIBackground`` (started in worker threads).
+Startup order: UnitreeG1 → STT / TTS / VLA → Move/Speak connectors →
+TaskSrvProvider (bind + start loads scenarios) → SoundSensor (bind + start
+registers STT callback) → backgrounds (TaskSrvBg, GUIBackground).
+Shutdown is reverse-order. SIGINT/SIGTERM trigger the stop event.
 
-Shutdown
---------
-Signal handler sets a stop event; backgrounds exit their loops at the next
-tick; providers are stopped in reverse order.
-
-Current limitation
-------------------
-Most providers' ``.start()`` is ``NotImplementedError`` (scaffold). Running
-this file end-to-end therefore aborts at the first unimplemented backend
-call — that is the *intent*: the runner doubles as a wiring-graph smoke
-test for whichever component is currently being filled in. Use
-``--dry-run`` to validate construction order without invoking ``.start()``.
+Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
+(most provider backends are still NotImplementedError during scaffold).
 """
 
 import argparse

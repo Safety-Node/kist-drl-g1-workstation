@@ -1,78 +1,14 @@
 """
-TaskSrv Provider — KIST DRL G1 Workstation [TASK-39]
-=====================================================
+TaskSrv Provider [TASK-39, REQ-44]
 
-Scenario-driven sub-task orchestrator that **replaces the LLM Cortex** for
-the KIST demo (per CONV-004, KIST mail 2026-05-22, SYS-REQ
-``[DEPRECATED 2026-05-24]`` on REQ-28 / REQ-36 / REQ-40).
+Scenario-driven sub-task orchestrator that replaces the LLM Cortex for the
+KIST demo (CONV-004: REQ-28/36/40 [DEPRECATED 2026-05-24]).
 
-The provider owns:
+Scenarios are Python objects under ``config/scenarios/`` (not YAML — typed
++ polymorphic ``SuccessCriterion.evaluate(state)``).
 
-1. A loaded **scenario script** (plain Python — see ``config/scenarios/``)
-   — ordered list of ``SubTask`` records, each with a natural-language
-   prompt for the VLA Provider and a ``SuccessCriterion`` to decide when
-   the sub-task is done.
-2. A **keyword router** — fed by Sound Sensor's ``on_audio(text, ts)``
-   callback. A matched keyword triggers the corresponding scenario.
-3. The **dispatch path** to Move Connector (which formats the prompt into
-   a VLA Provider call).
-4. A **success-detection** poll — reads ``UnitreeG1Provider.uwb_pose`` and
-   ``.joint_state`` (CONV-005 whole-body VLA: pose for locomotion sub-tasks,
-   joint pos for manipulation sub-tasks; mix is per-sub-task choice).
-
-The polling itself runs on ``TaskSrvBg`` (separate plugin) — this provider
-only exposes ``tick()``; the BG calls it at a fixed rate so the provider
-stays single-threaded and easy to test.
-
-drawio C4 Container:
-    Name        : TaskSrv Provider
-    Technology  : Python
-    Description : Scenario-driven sub-task orchestrator (replaces LLM Cortex).
-
----
-
-## Why Python scenarios (not YAML)
-
-Scenarios are typed Python objects under ``config/scenarios/`` rather than
-YAML files. Trade-off accepted (2026-05-24): YAML parser + validator + ad-hoc
-schema (~80 LoC) replaced by Python imports + dataclasses (~0 LoC of parsing).
-Cost: non-coders cannot edit scenarios — acceptable since the only authors
-are the developers themselves. Benefit: full IDE / pyright autocomplete,
-static type checking, polymorphic ``SuccessCriterion.evaluate(state)``
-instead of string-keyed kind dispatch.
-
----
-
-## Data flow
-
-    Sound Sensor (STT transcript)                       (TASK-46)
-        ↓ on_audio(text, ts)
-    TaskSrv Provider                                    (this class)
-        ├─ keyword match → load scenario + queue sub-tasks
-        ├─ dispatch current sub-task prompt
-        │       ↓ Move Connector.connect(MoveInput(action=prompt))
-        │   Move Connector → VLA Provider                (TASK-40)
-        │
-        └─ poll UnitreeG1Provider for success
-                ↑ uwb_pose (locomotion sub-tasks)
-                ↑ joint_state (manipulation sub-tasks)
-    TaskSrv BG (TASK-39 companion plugin)
-        ↑ calls TaskSrvProvider.tick() at fixed rate
-
----
-
-## Lifecycle (per CONV-001 Option D — explicit init in run.py)
-
-    run.py:
-        unitree_g1 = UnitreeG1Provider(...); unitree_g1.start()
-        vla = VLAProvider(...); vla.start()
-        move_conn = MoveConnector(ActionConfig())
-        task_srv = TaskSrvProvider(TaskSrvConfig())
-        task_srv.bind(unitree_g1=unitree_g1, move_connector=move_conn)
-        task_srv.start()                                # loads scenarios
-
-Sound Sensor (also created in run.py) wires its callback to
-``task_srv.on_audio``.
+Lifecycle owned by ``run.py`` (CONV-001). Polling driven by ``TaskSrvBg``
+so this provider stays single-threaded.
 """
 
 import logging

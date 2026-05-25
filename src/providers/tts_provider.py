@@ -1,85 +1,18 @@
 """
-TTS Provider — KIST DRL G1 Workstation [TASK-43]
-================================================
+TTS Provider [TASK-43, REQ-29]
 
-Vendor-agnostic Text-to-Speech provider. Default backend: Naver Clova Voice
-Premium (REST). ``backend`` is selectable via ``TTSConfig`` so the
-implementation can be swapped (ETRI / Kokoro / ElevenLabs / ...) without
-touching downstream consumers (Speak Connector).
+Vendor-agnostic Text-to-Speech. Default backend: Naver Clova Voice Premium REST.
 
-drawio C4 Container:
-    Name        : TTS Provider
-    Technology  : Cloud TTS (default: Naver Clova Voice Premium REST)
-    Description : Synthesizes Korean text into PCM, ships to NX speaker.
+PC resamples Clova native 22050/24000 Hz → 16 kHz mono int16 before publishing
+to /bridge/cmd/audio_out (REQ-29 2026-05-15: PC resample responsibility).
+NX speaker_node consumes (relayed onboard as /onboard/audio/playback).
 
----
-
-## Data flow
-
-    TaskSrvProvider                                   (PC)
-        ↓ Speak action
-    Speak Connector                                   (PC)
-        ↓ synthesize(text)
-    TTS Provider                                      (this class)
-        ↓ publish_audio_out(pcm)                      ← UnitreeG1 Provider hook
-    UnitreeG1 Provider                                (PC, TASK-41)
-        ↓ /bridge/cmd/audio_out (g1_onboard_msgs/AudioPCM, NX speaker_node sink)
-    NX speaker_node                                   (Onboard)
-
-Resampling:
-    Naver Clova native sample rate is 22.05/24 kHz; PC down-resamples to
-    16 kHz mono so the wire format matches the NX mic_node spec (REQ-29
-    change log 2026-05-15 — "TTS resample is PC responsibility").
-
-Echo-cancel coordination:
-    NX speaker_node publishes /bridge/audio/speaker_state. STT Provider
-    drops audio while playing. TTS Provider itself does not need to read
-    speaker_state — it just publishes; the NX node's own publish raises
-    the flag.
-
----
-
-## ICD references
-
-| Direction | Topic / call                                | Note                       |
-|-----------|---------------------------------------------|----------------------------|
-| inbound   | synthesize(text) (callable)                 | ← Speak Connector          |
-| outbound  | Naver Clova Voice Premium /tts              | HTTPS POST                 |
-| outbound  | publish_audio_out(pcm) (via UnitreeG1)      | 16 kHz / 16-bit / mono     |
-| inbound   | cancel() (callable)                         | ← E-STOP path              |
-
-Out-of-scope:
-    - "OM1 MessageHook TTS" — removed 2026-05-24 with MessageHookHandler.
-      Lifecycle-message TTS, if revived, goes through this provider.
-
----
-
-Vendor reference (friend's original scaffold):
-    src/providers/example/naver_clova_tts_provider.py  ← Naver-specific class
-    This vendor-agnostic file (``tts_provider.py``) is the active replacement.
-
----
-
-TODO(REQ-29) [TASK-43]: backend abstraction — ``TTSBackend`` interface, Naver
-                        Clova default impl. Keep class name vendor-agnostic
-                        so other backends slot in without consumer changes.
-TODO(REQ-29) [TASK-43]: synthesize — POST text to Clova /tts endpoint with
-                        X-NCP-APIGW-API-KEY-ID / X-NCP-APIGW-API-KEY headers,
-                        receive MP3 or 22/24 kHz PCM.
-TODO(REQ-29) [TASK-43]: resample — 22050/24000 Hz → 16000 Hz mono int16
-                        (PC responsibility per REQ-29 2026-05-15).
-TODO(REQ-29) [TASK-43]: publish — push PCM bytes to UnitreeG1 Provider so the
-                        NX speaker_node consumes /bridge/cmd/audio_out
-                        (relayed onboard as /onboard/audio/playback).
-TODO(REQ-29) [TASK-43]: cancellation — E-STOP must interrupt in-flight HTTP
-                        request and drain pending audio.
-TODO(REQ-29) [TASK-43]: sentence-segment streaming for low TTFB (target
-                        < 600 ms for short utterances).
-TODO(REQ-29) [TASK-43]: API key via env (``NCP_CLOVA_CLIENT_ID`` /
-                        ``NCP_CLOVA_CLIENT_SECRET``).
-TODO(REQ-29) [TASK-43]: reconnect / retry on Clova outage (exponential
-                        backoff, surface state via property for GUI).
-TODO(REQ-29) [TASK-43]: unit/integration tests under tests/providers/.
+TODO(REQ-29) [TASK-43]: synthesize — POST to Clova /tts (X-NCP-APIGW-API-KEY-*).
+TODO(REQ-29) [TASK-43]: resample 22050/24000 → 16000 Hz mono int16.
+TODO(REQ-29) [TASK-43]: publish via UnitreeG1.publish_audio_out.
+TODO(REQ-29) [TASK-43]: cancel() interrupts in-flight on E-STOP.
+TODO(REQ-29) [TASK-43]: sentence-segment streaming (TTFB target < 600 ms).
+TODO(REQ-29) [TASK-43]: env keys NCP_CLOVA_CLIENT_ID / NCP_CLOVA_CLIENT_SECRET.
 """
 
 import logging

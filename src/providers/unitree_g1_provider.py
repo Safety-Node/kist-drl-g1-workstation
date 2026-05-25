@@ -1,82 +1,35 @@
 """
-UnitreeG1 Provider -- KIST DRL G1 Workstation [TASK-41]
-=======================================================
+UnitreeG1 Provider [TASK-41, REQ-32/33]
 
-Consolidated PC-side facade for all G1 onboard sensor/state subscriptions
-and motion command publishing. Single owner of the Zenoh/CycloneDDS-bridged
-``/bridge/*`` topics so downstream OM1 providers (VLA / TaskSrvProvider /
-GUI / etc.) just poll data properties without touching DDS themselves.
+PC-side facade for ``/bridge/*`` DDS topics. Single owner of subscribers +
+publishers; downstream providers poll the data properties.
+rclpy + CycloneDDS direct (CONV-002 — no Zenoh bridge daemon).
 
-drawio C4 Container:
-    Name        : UnitreeG1 Provider
-    Technology  : LAN / Python (rclpy + CycloneDDS, ROS 2 humble)
-    Description : DDS subscriber + topic exposure consolidator.
+Subscribes (BestEffort unless noted):
+  /bridge/sensors/color/compressed   sensor_msgs/CompressedImage
+  /bridge/sensors/depth/image_raw    sensor_msgs/Image
+  /bridge/sensors/audio_pcm          g1_onboard_msgs/AudioPCM
+  /bridge/sensors/joint_states       sensor_msgs/JointState
+  /bridge/sensors/imu                sensor_msgs/Imu        (base, IF-41)
+  /bridge/sensors/imu/ankle_left     sensor_msgs/Imu        (NEW 2026-05-22)
+  /bridge/sensors/imu/ankle_right    sensor_msgs/Imu        (NEW 2026-05-22)
+  /bridge/sensors/uwb_pose           geometry_msgs/PoseStamped
+  /bridge/motor/buf_state            g1_onboard_msgs/BufState        [Reliable]
+  /bridge/audio/speaker_state        g1_onboard_msgs/SpeakerState    [Reliable]
+  /bridge/safety/estop               g1_onboard_msgs/EstopFlag       [Reliable]
 
-PC↔NX transport decision (vs Zenoh bridge):
-    rclpy + CycloneDDS direct over LAN (same DDS domain as NX). PC must
-    have ROS 2 humble installed and the matching cyclonedds.xml network
-    interface configured. zenoh-bridge-ros2dds daemon NOT deployed on
-    NX. Rationale: team familiarity with ROS 2, ros2 cli / ros2 bag /
-    rqt / rviz2 directly usable, fewer moving parts for a single-LAN
-    single-robot demo. OM1 framework's internal Zenoh usage (mode
-    manager, config provider) remains intact but stays loopback-only.
+Publishes (Reliable):
+  /bridge/cmd/arm        g1_onboard_msgs/JointCmd     rt/arm_sdk, IF-6
+  /bridge/cmd/low        g1_onboard_msgs/JointCmd     rt/lowcmd, NEW 2026-05-22
+  /bridge/cmd/loco       g1_onboard_msgs/LocoCommand  StandUp/Damp/SitDown
+  /bridge/cmd/audio_out  g1_onboard_msgs/AudioPCM     TTS playback
 
----
+Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
+(navigation pkg removed 2026-05-22).
 
-## ICD bridge topics
-
-Subscribes (sensor + state):
-
-| Topic                                     | Type                              | QoS         |
-|-------------------------------------------|-----------------------------------|-------------|
-| /bridge/sensors/color/compressed          | sensor_msgs/CompressedImage       | BestEffort  |
-| /bridge/sensors/depth/image_raw           | sensor_msgs/Image                 | BestEffort  |
-| /bridge/sensors/audio_pcm                 | g1_onboard_msgs/AudioPCM          | BestEffort  |
-| /bridge/sensors/joint_states              | sensor_msgs/JointState            | BestEffort  |
-| /bridge/sensors/imu                       | sensor_msgs/Imu (base, IF-41)     | BestEffort  |
-| /bridge/sensors/imu/ankle_left            | sensor_msgs/Imu (NEW 2026-05-22)  | BestEffort  |
-| /bridge/sensors/imu/ankle_right           | sensor_msgs/Imu (NEW 2026-05-22)  | BestEffort  |
-| /bridge/sensors/uwb_pose                  | geometry_msgs/PoseStamped         | BestEffort  |
-| /bridge/motor/buf_state                   | g1_onboard_msgs/BufState          | Reliable    |
-| /bridge/audio/speaker_state               | g1_onboard_msgs/SpeakerState      | Reliable    |
-| /bridge/safety/estop                      | g1_onboard_msgs/EstopFlag         | Reliable    |
-
-Publishes (cmd outbound, Reliable):
-
-| Topic                  | Type                          | Note                                              |
-|------------------------|-------------------------------|---------------------------------------------------|
-| /bridge/cmd/arm        | g1_onboard_msgs/JointCmd      | rt/arm_sdk path, IF-6 (weight respected)          |
-| /bridge/cmd/low        | g1_onboard_msgs/JointCmd      | rt/lowcmd path, NEW 2026-05-22 (weight ignored)   |
-| /bridge/cmd/loco       | g1_onboard_msgs/LocoCommand   | StandUp/Damp/SitDown — usage scope TBD            |
-| /bridge/cmd/audio_out  | g1_onboard_msgs/AudioPCM      | TTS playback to onboard speaker                   |
-
-Deprecated topics intentionally NOT handled (audit only):
-
-| Topic                  | Reason                                                                |
-|------------------------|-----------------------------------------------------------------------|
-| /bridge/cmd/nav_goal   | Nav Cmd Goal ICD [DEPRECATED 2026-05-22] — navigation pkg removed     |
-| /bridge/nav/state      | navigation pkg removed; no producer on NX                             |
-
----
-
-## Downstream consumers (PC providers polling this facade)
-
-- VLA Provider           : color/depth + joint_state + IMU (base + ankle L/R) + buf_state
-- TaskSrvProvider        : uwb_pose + joint_state (sub-task success polling)
-- STT Provider           : audio_pcm + speaker_state (echo cancel hint)
-- Speak Connector + TTS  : publish_audio_out (sink)
-- GUI Background         : everything (via IOProvider)
-
----
-
-TODO(REQ-32) [TASK-41]: rclpy / CycloneDDS participant init; load cyclonedds.xml.
-TODO(REQ-32) [TASK-41]: subscribe all topics with QoS table above (BestEffort vs Reliable).
-TODO(REQ-32) [TASK-41]: TopicCache update on every callback (value + monotonic ts).
-TODO(REQ-32) [TASK-41]: stale detection helpers (`stale(now, ttl_s)`).
-TODO(REQ-33) [TASK-41]: publish methods for /bridge/cmd/{arm, low, loco, audio_out}.
-TODO(REQ-33) [TASK-41]: comm_bridge_alive() heartbeat — block publishes if stale > N ms.
-TODO(REQ-32) [TASK-41]: reconnect strategy on LAN drop / Zenoh bridge restart.
-TODO(REQ-32) [TASK-41]: unit/integration tests under tests/providers/.
+TODO(REQ-32) [TASK-41]: rclpy init + subscribe with QoS above + TopicCache update.
+TODO(REQ-33) [TASK-41]: publish methods + comm_bridge_alive() heartbeat watchdog.
+TODO(REQ-32) [TASK-41]: reconnect strategy on LAN drop.
 """
 
 import logging

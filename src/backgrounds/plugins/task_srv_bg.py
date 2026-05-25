@@ -1,51 +1,13 @@
 """
-TaskSrv BG — KIST DRL G1 Workstation [TASK-39]
-==============================================
+TaskSrv BG [TASK-39, REQ-44]
 
-Background runner that drives ``TaskSrvProvider.tick()`` at a fixed rate
-so the provider can stay single-threaded and easy to test.
+Fixed-rate driver for ``TaskSrvProvider.tick()``. Keeps the provider single-
+threaded (no internal thread to join in tests) and pause-able by unloading
+the BG without killing the provider singleton.
 
-drawio C4 Container:
-    Name        : TaskSrv BG
-    Technology  : Python
-    Description : Periodic tick driver for TaskSrvProvider success polling.
-
----
-
-## Lifecycle (per CONV-001 Option D)
-
-This BG does **not** create the TaskSrvProvider — ``run.py`` does. The BG
-resolves the already-started singleton via plain ``TaskSrvProvider()`` and
-just calls ``.tick()`` until ``should_stop()``.
-
-    run.py:
-        task_srv = TaskSrvProvider(config=...)
-        task_srv.bind(...).start()
-        # Background orchestrator picks up TaskSrvBg from mode_config.json5
-        # and calls bg.run() in its own thread.
-
----
-
-## Why a separate BG plugin?
-
-Keeping the polling loop **out** of the provider makes the provider:
-
-- single-threaded (no internal thread to join in tests),
-- driven at a configurable rate (`tick_rate_hz`) without re-instantiating,
-- pause-able by un-loading the BG from the mode config without killing
-  the provider singleton (which other code may still reach for
-  ``register_state_callback`` etc.).
-
----
-
-TODO(REQ-44) [TASK-39]: resolve TaskSrvProvider singleton in run() (lazy)
-TODO(REQ-44) [TASK-39]: rate-limited loop: time.monotonic() pacing so
-                                  drift doesn't accumulate.
-TODO(REQ-44) [TASK-39]: on provider.tick() exception: log + continue
-                                  (do not crash the BG, do not silently swallow).
-TODO(REQ-44) [TASK-39]: stop() — let the current tick finish, exit loop.
-TODO(REQ-44) [TASK-39]: tests under tests/backgrounds/plugins/test_task_srv_bg.py
-                                  (stub provider with a counting tick()).
+Resolves the provider singleton lazily in ``run()`` so run.py's explicit
+startup ordering (CONV-001) is respected — BG ctors run before the provider
+is bound + started.
 """
 
 import logging

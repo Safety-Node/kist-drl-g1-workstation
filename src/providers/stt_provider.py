@@ -1,73 +1,19 @@
 """
-STT Provider — KIST DRL G1 Workstation [TASK-42]
-================================================
+STT Provider [TASK-42, REQ-27]
 
-Vendor-agnostic Speech-to-Text streaming provider. Default backend:
-Google Cloud Speech-to-Text v2 streaming. ``backend`` is selectable via
-``STTConfig`` so the implementation can be swapped (Whisper / Riva / ...)
-without touching downstream consumers.
+Vendor-agnostic Speech-to-Text streaming. Default backend: Google Cloud STT v2
+streaming. PCM in (16 kHz mono from /bridge/sensors/audio_pcm) → transcript str
+out via callback (→ Sound Sensor → TaskSrvProvider, CONV-004).
 
-drawio C4 Container:
-    Name        : STT Provider
-    Technology  : Cloud STT (default: Google Cloud Speech-to-Text v2 streaming)
-    Description : Streams microphone audio to an STT backend, emits transcripts.
+Echo cancellation: drops audio while ``speaker_state.playing == True``, with
+``echo_cancel_tail_ms`` tail-off after the flag clears.
 
----
-
-## Data flow
-
-    NX mic_node                                       (Onboard)
-        ↓ /bridge/sensors/audio_pcm (16kHz/16bit/mono)
-    UnitreeG1 Provider                                (PC, TASK-41)
-        ↓ register_audio_callback                     ← STT Provider hook
-    STT Provider                                      (this class)
-        ↓ register_transcript_callback                ← Sound Sensor hook
-    Sound Sensor → TaskSrvProvider                    (downstream)
-
-Echo cancellation:
-    UnitreeG1 Provider.speaker_state.value.playing == True
-    → STT Provider drops incoming audio chunks (with tail-off) so the
-    robot does not transcribe its own TTS output.
-
----
-
-## ICD references
-
-| Direction | Topic / call                                | Note                       |
-|-----------|---------------------------------------------|----------------------------|
-| inbound   | /bridge/sensors/audio_pcm (via UnitreeG1)   | 16kHz / 16bit / mono PCM   |
-| inbound   | /bridge/audio/speaker_state (via UnitreeG1) | echo-cancel hint           |
-| outbound  | Google Cloud STT v2 streaming_recognize     | HTTPS / gRPC               |
-| outbound  | transcript str (callback)                   | → Sound Sensor             |
-
-Out-of-scope (deprecated per 2026-05-22 user decision):
-    - "Audio Context to Cortex" ICD — Cortex(LLM) replaced by TaskSrvProvider.
-      Sound Sensor formats audio context for TaskSrvProvider directly now.
-
----
-
-Vendor reference (friend's original scaffold):
-    src/providers/example/google_stt_provider.py  ← Google-specific class name
-    This vendor-agnostic file (``stt_provider.py``) is the active replacement.
-
----
-
-TODO(REQ-27) [TASK-42]: backend abstraction — ``STTBackend`` interface, Google
-                        default impl. Keep class name vendor-agnostic so other
-                        backends slot in without consumer changes.
-TODO(REQ-27) [TASK-42]: streaming open — gRPC bidi to Google Cloud Speech v2.
-TODO(REQ-27) [TASK-42]: audio callback — receive PCM chunks from UnitreeG1
-                        Provider, push to streaming_recognize sender queue.
-TODO(REQ-27) [TASK-42]: speaker_state echo cancel — drop / mute audio while
-                        TTS is playing, with ``echo_cancel_tail_ms`` tail-off.
-TODO(REQ-27) [TASK-42]: transcript callback — emit final transcripts to the
-                        registered Sound Sensor; partial transcripts optional.
-TODO(REQ-27) [TASK-42]: latency budget — p50 < 500ms from VAD endpoint to
-                        transcript callback (Notion Task verification step).
-TODO(REQ-27) [TASK-42]: reconnect / retry on cloud STT outage (exponential
-                        backoff, surface state via a property for GUI).
-TODO(REQ-27) [TASK-42]: API key via env (``GOOGLE_APPLICATION_CREDENTIALS``).
-TODO(REQ-27) [TASK-42]: unit/integration tests under tests/providers/.
+TODO(REQ-27) [TASK-42]: backend abstraction; Google bidi gRPC stream.
+TODO(REQ-27) [TASK-42]: audio callback from UnitreeG1; speaker_state echo gate.
+TODO(REQ-27) [TASK-42]: transcript callback (finals; partials optional).
+TODO(REQ-27) [TASK-42]: latency p50 < 500 ms VAD→callback.
+TODO(REQ-27) [TASK-42]: reconnect + state property for GUI.
+TODO(REQ-27) [TASK-42]: GOOGLE_APPLICATION_CREDENTIALS env.
 """
 
 import logging

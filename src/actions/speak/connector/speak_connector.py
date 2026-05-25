@@ -1,22 +1,8 @@
 """
-Speak Connector -- KIST DRL G1 Workstation
-==========================================
+Speak Connector
 
-drawio C4 Container:
-    Name        : Speak Connector
-    Technology  : Python
-    Description : Routes speak actions to TTS Provider.
-
-Edges:
-    Cortex            -> Speak Connector : Speak Response [text]
-    Speak Connector   -> TTS Provider    : Text payload (Naver Clova)
-
-TBD:
-    - Sentence-segment for streaming TTS (lower latency)
-    - Language detection / fallback (ko -> en if Korean is unavailable)
-    - Interrupt handling: stop in-flight playback on new utterance
-    - Backpressure: drop if queue depth exceeds threshold
-    - Logging hook for safety review (every spoken phrase)
+Routes a SpeakInput (text) to the TTS Provider via the OM1
+``ActionConnector.connect(SpeakInput)`` contract.
 """
 
 import logging
@@ -26,19 +12,13 @@ from actions.speak.interface import SpeakInput
 
 
 class SpeakConnector(ActionConnector[ActionConfig, SpeakInput]):
-    """
-    Connector that forwards Cortex's textual speak action to the
-    workstation TTS Provider (Naver Clova).
-    """
+    """Forwards a SpeakInput to the TTS Provider."""
 
     def __init__(self, config: ActionConfig):
         super().__init__(config)
-        # TODO: obtain NaverClovaTTSProvider handle
+        # TODO: bind(tts=...) once added
         logging.info("SpeakConnector: skeleton initialized")
 
     async def connect(self, output_interface: SpeakInput) -> None:
-        """Forward SpeakInput.action (text) to the TTS Provider."""
-        # TODO: split into sentences for streaming synthesis
-        # TODO: await NaverClovaTTSProvider.synthesize(text)
-        # TODO: pipe resulting PCM via UnitreeG1Provider.publish_audio_out
+        # TODO: await self._tts.synthesize(output_interface.action)
         raise NotImplementedError("SpeakConnector.connect: TBD")

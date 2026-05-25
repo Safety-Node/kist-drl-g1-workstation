@@ -1,75 +1,15 @@
 """
-Sound Sensor -- KIST DRL G1 Workstation [TASK-46]
-=================================================
+Sound Sensor [TASK-46, REQ-44]
 
-Bridges STT Provider transcripts into TaskSrvProvider's keyword router.
+Bridges STTProvider transcripts into TaskSrvProvider's keyword router (CONV-004:
+no Cortex prompt block anymore). Not a @singleton — one instance per mode.
 
-Vendor-agnostic: imports the **`STTProvider`** (vendor-agnostic name,
-see CONV-003) rather than any Google/Whisper/Riva-specific class. The
-backend selection lives in STT Provider's runtime config.
+Subclasses OM1 ``FuserInput`` so it slots into ``mode_config.json5: agent_inputs[]``
+without framework changes. ``_poll`` / ``_raw_to_text`` are inert stubs — the
+live path is the STT callback fanning out to TaskSrvProvider.
 
-drawio C4 Container:
-    Name        : Sound Sensor
-    Technology  : Python
-    Description : Formats audio-related context for TaskSrvProvider routing.
-
----
-
-## Data flow (post 2026-05-22 KIST decision, see CONV-004)
-
-    STT Provider                                       (PC, TASK-42)
-        ↓ register_transcript_callback                 ← Sound Sensor hook
-    Sound Sensor                                       (this class)
-        ↓ on_transcript(text, ts)
-    TaskSrvProvider                                    (PC, TBD)
-        - keyword match → trigger scenario sub-task script
-
-Previously the Sound Sensor formatted an `<Audio context>` block for
-the OM1 LLM Cortex prompt. Cortex/VLM/Safety are deferred per
-SYS-REQ `[DEPRECATED 2026-05-24]` and replaced by TaskSrvProvider;
-the prompt-block formatter is gone. Audio context now lives as a
-typed `TranscriptEvent` pushed to TaskSrvProvider.
-
----
-
-## Lifecycle (per CONV-001 Option D — explicit init in run.py)
-
-    run.py:
-        stt = STTProvider(config=...).start()
-        task_srv = TaskSrvProvider(config=...).start()
-        sound_sensor = SoundSensor(config=...)        # plain object, not singleton
-        sound_sensor.bind(stt=stt, task_srv=task_srv) # explicit dependency wiring
-        sound_sensor.start()                          # registers STT callback
-
-Sound Sensor is **not** a `@singleton` -- multiple modes can choose to
-include/exclude it via mode_config.json5, and singleton-style sharing
-across configurations would muddy that.
-
----
-
-## OM1 FuserInput compatibility
-
-The class still subclasses `FuserInput[SoundSensorConfig, str]` so it
-slots into the existing OM1 `inputs:` plumbing in `mode_config.json5`
-without invasive framework changes. The `_poll()` / `_raw_to_text()`
-methods are NotImplementedError stubs -- they are not the primary
-path. The primary path is the STT callback fanning out to
-TaskSrvProvider; the FuserInput interface remains as a no-op hook for
-any future Cortex-style consumer.
-
----
-
-TODO(REQ-44) [TASK-46]: bind() -- accept STTProvider + TaskSrvProvider
-                                 singletons resolved by run.py. Validate both
-                                 are .started() before registering callback.
-TODO(REQ-44) [TASK-46]: start() -- register on_transcript callback with
-                                 STT Provider, init recent-transcript ring buffer.
-TODO(REQ-44) [TASK-46]: stop() -- unregister STT callback, flush buffer.
-TODO(REQ-44) [TASK-46]: on_transcript(text, ts) -- ring-buffer append,
-                                 confidence filter, dedupe, dispatch to
-                                 TaskSrvProvider.on_audio(text, ts).
-TODO(REQ-44) [TASK-46]: tests under tests/inputs/plugins/test_sound_sensor.py
-                                 (stub STT Provider + stub TaskSrvProvider).
+TODO(REQ-44) [TASK-46]: bind(stt, task_srv) + start() registers STT callback.
+TODO(REQ-44) [TASK-46]: on_transcript — dedupe + confidence filter + dispatch.
 """
 
 import logging
