@@ -226,6 +226,11 @@ class TaskSrvConfig:
     enable_speak_feedback: bool = True
     success_phrase: str = "성공했습니다."
     failure_phrase: str = "실패했습니다."
+    # Cancel keywords (substring match against STT transcript) are honoured
+    # even while a scenario is ACTIVE — gives the user a graceful abort that
+    # the KIST MBO recovery flow does not provide. Empty list disables.
+    cancel_keywords: List[str] = field(default_factory=list)
+    cancel_phrase: str = "취소했습니다."
 
 
 @singleton
@@ -309,14 +314,30 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     def on_audio(self, text: str, ts: Optional[float] = None) -> None:
         """
-        Match the transcript against scenario triggers. On hit, transition
-        IDLE → ACTIVE and dispatch the first sub-task. If already ACTIVE,
-        the transcript is ignored (no preemption in scaffold).
+        Match the transcript against scenario triggers.
+
+        Order:
+            1. If a scenario is ACTIVE and the transcript hits one of
+               ``config.cancel_keywords``, abort the active scenario.
+            2. If a scenario is ACTIVE (and no cancel), the transcript
+               is ignored — preemption is not allowed.
+            3. Otherwise look up scenario triggers and activate on hit.
         """
         if not self._running:
             logging.debug("TaskSrvProvider.on_audio: not running, ignoring")
             return
         if self._state == TaskState.ACTIVE:
+            if self._is_cancel_trigger(text):
+                logging.info(
+                    "TaskSrvProvider: cancel keyword matched ('%s'); "
+                    "aborting active scenario '%s'",
+                    text,
+                    self._active_scenario.name if self._active_scenario else "?",
+                )
+                self._speak(self._config.cancel_phrase)
+                self._reset_active()
+                self._state = TaskState.IDLE
+                return
             logging.debug(
                 "TaskSrvProvider.on_audio: scenario active, ignoring '%s'", text
             )
@@ -329,6 +350,15 @@ class TaskSrvProvider:
             text, matched.name,
         )
         self._activate(matched)
+
+    def _is_cancel_trigger(self, text: str) -> bool:
+        """True if ``text`` matches any of ``config.cancel_keywords``."""
+        if not self._config.cancel_keywords:
+            return False
+        if self._config.case_insensitive_keywords:
+            haystack = text.lower()
+            return any(k.lower() in haystack for k in self._config.cancel_keywords)
+        return any(k in text for k in self._config.cancel_keywords)
 
     # ------------------------------------------------------------------
     # Periodic tick (driven by TaskSrvBg)

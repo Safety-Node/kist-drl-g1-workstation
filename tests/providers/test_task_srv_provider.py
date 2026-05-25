@@ -330,6 +330,33 @@ def test_on_audio_no_match_keeps_idle():
     assert mv.dispatched == []
 
 
+def test_cancel_keyword_aborts_active_scenario():
+    """on_audio with a config.cancel_keyword aborts even when ACTIVE."""
+    mv = _StubConnector()
+    sp = _StubConnector()
+    cfg = TaskSrvConfig(cancel_keywords=["취소", "그만"])
+    p = TaskSrvProvider(config=cfg)
+    p.bind(unitree_g1=_StubG1(), move_connector=mv, speak_connector=sp)
+    p.start(scenarios=[_simple_scenario(trigger="go")])
+    p.on_audio("go")
+    assert p.state == TaskState.ACTIVE
+    p.on_audio("어 잠깐 취소해줘")
+    assert p.state == TaskState.IDLE
+    assert p.active_sub_task is None
+    assert sp.dispatched == [cfg.cancel_phrase]
+
+
+def test_active_scenario_not_preempted_without_cancel_keyword():
+    """Without cancel keywords, ACTIVE blocks all on_audio (regression)."""
+    mv = _StubConnector()
+    p = TaskSrvProvider()  # default config: cancel_keywords = []
+    p.bind(unitree_g1=_StubG1(), move_connector=mv)
+    p.start(scenarios=[_simple_scenario(trigger="go")])
+    p.on_audio("go")
+    p.on_audio("취소")  # not registered → ignored
+    assert p.state == TaskState.ACTIVE
+
+
 def test_on_audio_ignored_when_not_running():
     p = TaskSrvProvider()
     p.bind(unitree_g1=_StubG1(), move_connector=_StubConnector())
