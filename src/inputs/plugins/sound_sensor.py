@@ -53,7 +53,13 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
 
     Lifecycle: not a singleton. ``run.py`` constructs one instance, calls
     ``bind(stt=..., task_srv=...)``, then ``start()``. ``stop()`` unwires
-    the STT callback. Tests can construct independent instances freely.
+    the STT callback.
+
+    **Lifecycle discipline**: always call ``stop()`` before re-creating an
+    instance. STT's transcript callback list holds bound methods — an
+    abandoned SoundSensor without ``stop()`` leaves a dead bound method on
+    the STT subscriber list, so transcripts fan out to both the dead and
+    the new instance.
 
     The OM1 FuserInput interface (``_poll`` / ``_raw_to_text``) is
     retained as a no-op so the class still slots into the existing
@@ -102,7 +108,10 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Register transcript callback with STT Provider, ready buffer."""
-        # TODO(REQ-44) [TASK-46]: validate bind() was called
+        if self._stt is None or self._task_srv is None:
+            raise RuntimeError(
+                "SoundSensor.start: call bind(stt=..., task_srv=...) first"
+            )
         # TODO(REQ-44) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
         # TODO(REQ-44) [TASK-46]: self._started = True
         raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")

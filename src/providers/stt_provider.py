@@ -99,8 +99,7 @@ class STTProvider:
 
     def __init__(self, config: Optional[STTConfig] = None):
         self._config = config or STTConfig()
-        self._running = False
-        self._state = STTState.IDLE
+        self._state = STTState.IDLE   # running == (state != IDLE); no separate flag
         self._unitree_g1: Optional["UnitreeG1Provider"] = None  # bind() sets this
         self._callbacks: List[Callable[[TranscriptEvent], None]] = []
         self._callbacks_lock = threading.Lock()
