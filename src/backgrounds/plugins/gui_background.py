@@ -53,6 +53,15 @@ class GUIBackgroundConfig(BackgroundConfig):
         default="http://localhost:8081/stream",
         description="Display System endpoint (transport TBD — see module docstring).",
     )
+    heartbeat_every_frames: int = Field(
+        default=75,                          # 5 s at the default 15 fps
+        ge=0,
+        description=(
+            "Emit an INFO heartbeat (current Provider state snapshot) every "
+            "N frames. CONV-009: makes the otherwise-silent stream loop "
+            "observable without TRACE-level logging. 0 disables."
+        ),
+    )
 
 
 class GUIBackground(Background[GUIBackgroundConfig]):
@@ -75,6 +84,8 @@ class GUIBackground(Background[GUIBackgroundConfig]):
         """Composite + push loop (matches TaskSrvBg drift-free pacing pattern)."""
         period = 1.0 / float(self.config.fps)
         next_t = time.monotonic()
+        frame_counter = 0
+        heartbeat_n = self.config.heartbeat_every_frames
         logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
         # TODO(REQ-41) [TASK-47]: open encoder + display socket here.
         # try/finally ensures cleanup runs whether the loop exits via
@@ -88,6 +99,15 @@ class GUIBackground(Background[GUIBackgroundConfig]):
                     pass
                 except Exception:
                     logging.exception("GUIBackground: frame tick raised; continuing")
+                frame_counter += 1
+                if heartbeat_n and frame_counter % heartbeat_n == 0:
+                    logging.info(
+                        "GUIBackground: heartbeat frame=%d task=%s estop=%s synth=%s",
+                        frame_counter,
+                        self._task_srv.state.value,
+                        bool(self._unitree_g1.estop.value),
+                        self._tts.is_synthesizing,
+                    )
                 next_t += period
                 dt = next_t - time.monotonic()
                 if dt > 0:
