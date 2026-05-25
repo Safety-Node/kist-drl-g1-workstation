@@ -95,12 +95,12 @@ def _build_runtime() -> _Runtime:
     # TODO: vla.bind(unitree_g1=unitree_g1) once VLAProvider has bind()
     rt.providers = [unitree_g1, stt, tts, vla]
 
-    # Connectors (plain OM1 ActionConnector instances)
+    # Connectors. They are stateless adapters with no lifecycle of their
+    # own; their __init__ fetches the relevant Provider singletons that
+    # this function constructed above. No bind() ceremony — the @singleton
+    # decorator + CONV-001 ordering guarantees the right instances.
     move_conn = MoveConnector(ActionConfig())
     speak_conn = SpeakConnector(ActionConfig())
-    # TODO: MoveConnector.bind(vla=vla, unitree_g1=unitree_g1) once that
-    #       method exists on the connector (currently scaffold).
-    # TODO: SpeakConnector.bind(tts=tts) likewise.
 
     # Orchestrator (separate slot — started AFTER base providers since it
     # binds them, and scenarios are loaded inside start()).
