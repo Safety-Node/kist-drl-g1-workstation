@@ -13,11 +13,15 @@ so this provider stays single-threaded.
 
 import logging
 import math
+import queue
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+
+from actions.move.interface import MoveInput
+from actions.speak.interface import SpeakInput
 
 from .singleton import singleton
 
@@ -164,9 +168,16 @@ class TaskSrvConfig:
     failure_phrase: str = "실패했습니다."
     # Cancel keywords (substring match against STT transcript) are honoured
     # even while a scenario is ACTIVE — gives the user a graceful abort that
-    # the KIST MBO recovery flow does not provide. Empty list disables.
+    # the KIST MBO recovery flow does not provide.
+    #
+    # **Default is empty: cancel is OFF unless explicitly enabled.** Demo wiring
+    # populates this via ``config/sous_chef_g1.json5`` (currently
+    # ["취소", "그만", "멈춰"]). start() logs a warning if left empty.
     cancel_keywords: List[str] = field(default_factory=list)
     cancel_phrase: str = "취소했습니다."
+    # Drop queued audio older than this when tick() finally dequeues it.
+    # Prevents replay of stale transcripts after pause / resume. 0 disables.
+    stale_audio_s: float = 5.0
 
 
 @singleton
@@ -191,7 +202,15 @@ class TaskSrvProvider:
         self._unitree_g1 = None
         self._move_connector = None
         self._speak_connector = None
+        # _running distinguishes IDLE-armed (running=True, state=IDLE, waiting
+        # for trigger) from IDLE-stopped (running=False, before start() or
+        # after stop()). on_audio is a no-op when not running.
         self._running = False
+        # Inbound STT queue (T3): on_audio runs on the STT gRPC thread; we
+        # enqueue here and drain in tick() so all mutation of _state /
+        # _active_scenario / _active_sub_task_idx happens on the TaskSrvBg
+        # thread — keeps the provider single-threaded by design.
+        self._inbound: "queue.Queue[Tuple[str, Optional[float]]]" = queue.Queue()
         logging.info(
             "TaskSrvProvider: skeleton initialized (tick=%.1fHz)",
             self._config.tick_rate_hz,
@@ -222,12 +241,22 @@ class TaskSrvProvider:
         are imported from ``config.scenarios.ALL`` (lazy import to avoid a
         hard dependency at module load time).
         """
+        if self._unitree_g1 is None or self._move_connector is None:
+            raise RuntimeError(
+                "TaskSrvProvider.start: call bind(unitree_g1=..., move_connector=...) first"
+            )
         if scenarios is None:
             from config.scenarios import ALL as _ALL
             scenarios = list(_ALL)
+        self._validate_scenarios(scenarios)
         self._scenarios = scenarios
         self._trigger_index = self._build_trigger_index(scenarios)
         self._running = True
+        if not self._config.cancel_keywords:
+            logging.warning(
+                "TaskSrvProvider: cancel_keywords is empty — operator has no "
+                "graceful abort path; populate via config/sous_chef_g1.json5."
+            )
         logging.info(
             "TaskSrvProvider: loaded %d scenarios (%d triggers)",
             len(self._scenarios), len(self._trigger_index),
@@ -250,29 +279,29 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     def on_audio(self, text: str, ts: Optional[float] = None) -> None:
         """
-        Match the transcript against scenario triggers.
+        Enqueue a transcript for the next tick. Called from the STT gRPC
+        thread; actual processing happens on the TaskSrvBg thread via
+        :meth:`_process_audio` (T3 — keeps the provider single-threaded).
 
-        Order:
-            1. If a scenario is ACTIVE and the transcript hits one of
-               ``config.cancel_keywords``, abort the active scenario.
-            2. If a scenario is ACTIVE (and no cancel), the transcript
-               is ignored — preemption is not allowed.
-            3. Otherwise look up scenario triggers and activate on hit.
-
-        TODO(REQ-44) [TASK-39]: this is currently called from the STT
-        backend thread (gRPC worker) via SoundSensor.on_transcript, while
-        TaskSrvBg.tick() runs the success-poll loop on its own thread.
-        Both touch _state / _active_scenario / _active_sub_task_idx with
-        no lock — race conditions possible (e.g. two threads both see
-        IDLE and both call _activate). Provider is meant to be
-        single-threaded; preferred fix is to enqueue here and drain in
-        tick() (single thread keeps the design intent intact). Add a
-        ``queue.Queue`` field, push (text, ts) here, drain in tick()
-        before evaluating the success criterion.
+        Cancel latency: up to ``1 / tick_rate_hz`` (≤100 ms at 10 Hz).
         """
         if not self._running:
             logging.debug("TaskSrvProvider.on_audio: not running, ignoring")
             return
+        self._inbound.put((text, ts))
+
+    def _process_audio(self, text: str, ts: Optional[float]) -> None:
+        """Single-threaded transcript handler (called from tick())."""
+        # Stale-message guard: drop transcripts that were queued before a
+        # pause / resume gap longer than stale_audio_s.
+        if ts is not None and self._config.stale_audio_s > 0:
+            age = time.monotonic() - ts
+            if age > self._config.stale_audio_s:
+                logging.info(
+                    "TaskSrvProvider: dropping stale audio (age=%.2fs > %.2fs): '%s'",
+                    age, self._config.stale_audio_s, text,
+                )
+                return
         if self._state == TaskState.ACTIVE:
             if self._is_cancel_trigger(text):
                 logging.info(
@@ -286,7 +315,7 @@ class TaskSrvProvider:
                 self._state = TaskState.IDLE
                 return
             logging.debug(
-                "TaskSrvProvider.on_audio: scenario active, ignoring '%s'", text
+                "TaskSrvProvider._process_audio: scenario active, ignoring '%s'", text
             )
             return
         matched = self._match_trigger(text)
@@ -317,7 +346,18 @@ class TaskSrvProvider:
         IDLE / SUCCESS / FAILED states are flipped back to IDLE here so the
         transient terminal states are observable for exactly one tick by
         the GUI poller, then cleared.
+
+        Also drains the inbound STT queue first (T3) so all state mutation
+        happens on this (TaskSrvBg) thread.
         """
+        # Drain queued transcripts from the STT thread first.
+        while True:
+            try:
+                text, ts = self._inbound.get_nowait()
+            except queue.Empty:
+                break
+            self._process_audio(text, ts)
+
         if self._state in (TaskState.SUCCESS, TaskState.FAILED):
             self._reset_active()
             self._state = TaskState.IDLE
@@ -350,7 +390,13 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     @property
     def state(self) -> TaskState:
-        """Current orchestrator state. Read-safe from any thread."""
+        """
+        Current orchestrator state. Read-safe from any thread.
+
+        SUCCESS / FAILED are transient — only observable for one tick before
+        tick() clears them back to IDLE. GUI poller must run at
+        ≥ ``TaskSrvBg.tick_rate_hz`` (default 10 Hz) to catch them.
+        """
         return self._state
 
     @property
@@ -370,6 +416,18 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+    def _validate_scenarios(self, scenarios: List[Scenario]) -> None:
+        """Fail fast on malformed scenarios so demo-day surprises don't happen."""
+        for sc in scenarios:
+            if not sc.sub_tasks:
+                raise ValueError(
+                    f"Scenario {sc.name!r} has no sub_tasks — would FAIL on first dispatch"
+                )
+            if not sc.triggers:
+                logging.warning(
+                    "TaskSrvProvider: scenario %r has no triggers — unreachable", sc.name
+                )
+
     def _build_trigger_index(
         self, scenarios: List[Scenario]
     ) -> Dict[str, Scenario]:
@@ -420,13 +478,9 @@ class TaskSrvProvider:
                 sub_task.prompt,
             )
             return
-        # OM1 canonical action API: ActionConnector.connect(MoveInput(action=...))
-        # is async. MoveInput.action is typed MovementAction enum but the OM1
-        # ros2 connector matches it as a string — we pass the VLA prompt as
-        # the action string. MoveConnector implementation will adapt to the
-        # whole-body VLA path (TASK-40); this just keeps the call site stable.
-        from actions.move.interface import MoveInput  # type: ignore
-
+        # OM1 canonical action API: ActionConnector.connect(MoveInput(action=...)).
+        # MoveInput.action is now ``str`` (T1) — whole-body VLA (CONV-005) takes
+        # the free-form prompt directly.
         _schedule_coro(self._move_connector.connect(MoveInput(action=sub_task.prompt)))
         logging.info(
             "TaskSrvProvider: dispatched sub-task[%d] '%s'",
@@ -468,8 +522,6 @@ class TaskSrvProvider:
         if self._speak_connector is None:
             logging.info("TaskSrvProvider: [speak] %s", phrase)
             return
-        from actions.speak.interface import SpeakInput  # type: ignore
-
         _schedule_coro(self._speak_connector.connect(SpeakInput(action=phrase)))
 
     def _reset_active(self) -> None:
@@ -546,6 +598,16 @@ def _schedule_coro(coro: Any) -> None:
 
     This is the only bridge between the sync ``TaskSrvProvider`` API
     surface and the async OM1 ``ActionConnector.connect()`` contract.
+
+    TODO(T9): the asyncio.run() fallback creates and closes a new event
+    loop per call and is fully blocking — VLA infer (~67 ms) would stall
+    the TaskSrvBg tick. When the connector implementations land, switch
+    to one of:
+      - TaskSrvBg owns a long-lived asyncio loop on its thread, here we
+        call ``loop.call_soon_threadsafe(loop.create_task, coro)``;
+      - dispatch becomes fire-and-forget through a queue + dedicated
+        worker thread/loop.
+    Either way drops the per-call loop creation cost.
     """
     import asyncio
 
