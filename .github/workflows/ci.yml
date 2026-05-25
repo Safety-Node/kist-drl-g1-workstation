@@ -1,0 +1,52 @@
+# CI — workstation (PC, OM1 fork).
+#
+# Mirrors the onboard repo's pattern (separate ci.yml + pr-meta.yml) but
+# adapted to a Python / uv / pytest project instead of ROS 2 colcon.
+#
+# Scope (today, during scaffold phase):
+#   - unit-test only. Lint (ruff/black/isort/pyright/vulture) is intentionally
+#     deferred until scaffold provider methods stop raising NotImplementedError
+#     en masse (vulture trips on unused args, pyright on unreachable code).
+#     Once a backend lands, add the lint job back — pyproject.toml already
+#     configures all five tools so it is one workflow file change.
+#   - CycloneDDS is NOT installed: workstation unit tests use mocks, not real
+#     DDS. The dds optional-extra (cyclonedds Python binding) is therefore not
+#     synced. NX-side CI is what exercises real DDS, on a different runner.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-test:
+    name: unit-test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: System deps (portaudio for pyaudio/sounddevice install)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends portaudio19-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python from pyproject
+        run: uv python install 3.12
+
+      - name: uv sync
+        # No --frozen: uv.lock is gitignored (*.lock) so CI resolves fresh
+        # each run. To make builds bit-reproducible: track uv.lock and add
+        # --frozen here.
+        run: uv sync
+
+      - name: pytest
+        run: uv run pytest -q --log-cli-level=WARNING
