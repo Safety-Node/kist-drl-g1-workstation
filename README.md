@@ -5,7 +5,7 @@
 OpenMind OM1 fork for the PC (RTX 4090) running KIST G1 collaborative demo (2026).
 Speech I/O, VLA inference, task orchestration, GUI streaming.
 
-> Target HW: PC (Ubuntu 22.04, RTX 4090)
+> Target HW: PC (Ubuntu 24.04, RTX 4090)
 > Companion repo: `kist-drl-g1-onboard` (NX side — sensors / safety / motors)
 
 > 🚧 **Scaffold.** Most providers/connectors are still placeholders. Implementation
@@ -17,48 +17,80 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 
 | # | Component | Path | Notes |
 |---|---|---|---|
-| 1 | STT Provider | `src/providers/stt_provider.py` (TBD) | Default backend: Google Cloud STT. Vendor reference: `src/providers/example/google_stt_provider.py` |
-| 2 | TTS Provider | `src/providers/tts_provider.py` | Default backend: Naver Clova (TASK-43 scaffold). Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
-| 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade via Zenoh bridge (TASK-41 scaffold) |
+| 1 | STT Provider | `src/providers/stt_provider.py` | Google Cloud STT default (TASK-42 scaffold). Vendor reference: `src/providers/example/google_stt_provider.py` |
+| 2 | TTS Provider | `src/providers/tts_provider.py` | Naver Clova default (TASK-43 scaffold). Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
+| 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade — rclpy + CycloneDDS direct (TASK-41 scaffold) |
 | 4 | VLA Provider | `src/providers/vla_provider.py` | GR00T N1.7 + GearSonic placeholder (TASK-40 scaffold). Vendor reference: `src/providers/example/vla_groot_provider.py` |
-| 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` (TASK-39 scaffold) | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
-| 6 | Move Connector | `src/actions/move/connector/move_connector.py` | Routes sub-task prompts to VLA |
+| 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
+| 6 | Move Connector | `src/actions/move/connector/move_connector.py` | Routes sub-task prompts to VLA / LocoCommand |
 | 7 | Speak Connector | `src/actions/speak/connector/speak_connector.py` | Text → TTS Provider |
 | 8 | Sound Sensor | `src/inputs/plugins/sound_sensor.py` | STT transcript → TaskSrvProvider |
 | 9 | GUI Background | `src/backgrounds/plugins/gui_background.py` | Streams video + task status to Display System |
-| 10 | IOProvider | `src/providers/io_provider.py` | OM1 infra |
+| 10 | IOProvider | `src/providers/io_provider.py` | OM1 infra — NOT used in KIST flow (CONV-011) |
 
 Deferred (kept in repo as `[DEPRECATED]` only in spec; not implemented):
 - VLM Provider (Cosmos), Safety Provider, LLM Cortex — see SYS-REQ `[DEPRECATED 2026-05-24]`.
 
 ---
 
-## Build & Run
+## Install
 
 PC requirements:
-- Ubuntu 22.04
-- ROS 2 humble (for `rclpy` PC↔NX comm with the onboard's CycloneDDS network)
-- Python 3.12 (managed via `uv`)
+- Ubuntu 24.04 (or 22.04)
+- ROS 2 jazzy (or humble — must match the NX onboard distro)
+- Python 3.12+ (managed via `uv`)
 
 ```bash
-# system deps
-sudo apt-get update && sudo apt-get install -y portaudio19-dev python3-dev ffmpeg
+# System deps
+sudo apt-get update && sudo apt-get install -y \
+    portaudio19-dev python3-dev ffmpeg \
+    ros-jazzy-rmw-cyclonedds-cpp     # use ros-humble-... on Ubuntu 22.04
 
-# ROS 2 humble (one-time)
-# follow https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
-# then in every shell:
-source /opt/ros/humble/setup.bash
+# ROS 2 — https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
+source /opt/ros/jazzy/setup.bash
 export CYCLONEDDS_URI=file://$(pwd)/cyclonedds/cyclonedds.xml
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-# python deps + run
-uv venv
-uv run src/run.py kist_g1_demo   # TBD mode config
+# Python deps (CycloneDDS Python bindings build against the C lib above)
+uv sync --extra dds
+
+# Vendored Unitree SDK (used by src/runtime/robotics.py).
+# Note: src/ubtech/ is also listed in .gitmodules from upstream OM1 but is not
+# imported by KIST code — init only what's used.
+git submodule update --init src/unitree
+
+# Credentials — loaded from repo-root .env by src/run.py (python-dotenv, CONV-001).
+# Required keys: NCP_CLOVA_CLIENT_ID / NCP_CLOVA_CLIENT_SECRET (TTS),
+# GOOGLE_APPLICATION_CREDENTIALS (path to GCP service-account JSON for STT).
+cp .env.example .env
+$EDITOR .env
 ```
 
-PC↔NX transport: **rclpy + CycloneDDS direct** (no Zenoh bridge daemon on the NX).
-PC and NX must share the same DDS domain and `cyclonedds.xml` network interface.
-OM1's internal Zenoh (mode manager, config provider) remains but stays loopback-only.
+---
+
+## Run
+
+Three scaffold-stage modes, ordered by increasing scope:
+
+```bash
+# 1. Wiring smoke test — construct + wire every component, skip .start().
+#    Catches import / @singleton order / pydantic validation problems.
+uv run python src/run.py --dry-run
+
+# 2. Exercise TaskSrvProvider end-to-end with stubbed Connectors and an
+#    injected trigger; full state machine cycle in ~5 s.
+uv run python scripts/exercise_task_srv.py
+
+# 3. Live scaffold runtime — TaskSrvProvider + backgrounds run; un-implemented
+#    Provider .start() calls are logged + skipped. Ctrl+C exits cleanly.
+uv run python src/run.py --scaffold-loop
+
+# (Future) Full run, once backends land
+uv run python src/run.py
+```
+
+PC↔NX transport: rclpy + CycloneDDS direct (CONV-002 — no Zenoh bridge daemon).
+PC and NX must share the same DDS domain + `cyclonedds.xml` network interface.
 
 `safety_monitor` / `motor_controller` run on the NX (see `kist-drl-g1-onboard`).
 
@@ -74,6 +106,7 @@ OM1's internal Zenoh (mode manager, config provider) remains but stays loopback-
 | Verification | [Tests DB](https://www.notion.so/a67e62ef1cfc4f85be29a340107846b6) |
 
 Each `TODO(REQ-XX) [TASK-XX]` in code links to the matching Notion page.
+Code-level architectural decisions (CONV-001..011) live in [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
 
 ---
 
@@ -81,15 +114,14 @@ Each `TODO(REQ-XX) [TASK-XX]` in code links to the matching Notion page.
 
 - Non-G1 platforms removed (Go2 / Turtlebot4 / Yanshee / Booster / LimX K1·Tron / Spot / Cubly)
 - Multi-vendor backends pruned (VLM / ASR / TTS / Web3 / Telegram / Twitter / Discord / Tesla / GPS / RTK ...)
-- LLM Cortex deferred → TaskSrvProvider scripted orchestration (KIST 2026-05-22)
-- KIST workstation components scaffolded
-
-Upstream remains accessible:
-
-```bash
-git remote -v   # origin / upstream
-git fetch upstream && git merge upstream/main   # if needed
-```
+- LLM Cortex deferred → TaskSrvProvider scripted orchestration (CONV-004)
+- IOProvider unused in KIST data flow; direct singleton polling (CONV-010, CONV-011)
+- No pytest infra — `system_hw_test/` + dev logging only (CONV-009)
+- Upstream merge path inactive — no `upstream` git remote configured. OM1 changes are
+  not auto-tracked; any future absorption is a manual cherry-pick.
+- Two submodules pinned from upstream OM1:
+  - `src/unitree/` — Unitree SDK (used by `src/runtime/robotics.py`, **required**)
+  - `src/ubtech/` — UBTech (Yanshee etc.) SDK, **unused in KIST flow** — slated for removal alongside `src/providers/io_provider.py`.
 
 ---
 
