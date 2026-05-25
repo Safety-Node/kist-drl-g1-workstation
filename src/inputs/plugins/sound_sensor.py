@@ -14,21 +14,13 @@ TODO(REQ-44) [TASK-46]: on_transcript — dedupe + confidence filter + dispatch.
 
 import logging
 from collections import deque
-from dataclasses import dataclass
 from typing import Deque, Optional
 
 from pydantic import Field
 
 from inputs.base import Message, SensorConfig
 from inputs.base.loop import FuserInput
-
-
-@dataclass
-class TranscriptEvent:
-    """One transcript line with arrival timestamp (monotonic seconds)."""
-
-    text: str
-    ts: float
+from providers.stt_provider import TranscriptEvent
 
 
 class SoundSensorConfig(SensorConfig):
@@ -125,21 +117,26 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     # ------------------------------------------------------------------
     # STT → TaskSrvProvider bridge (primary path)
     # ------------------------------------------------------------------
-    def on_transcript(self, text: str, ts: Optional[float] = None) -> None:
+    def on_transcript(self, event: TranscriptEvent) -> None:
         """
-        Callback fired by STT Provider for each final transcript.
+        Callback fired by STT Provider for each transcript.
 
         Behaviour (when implemented):
-            1. Ignore empty / whitespace-only text.
-            2. Drop if identical to the most recent buffered entry and
-               within ``dedupe_window_s`` (Google STT duplicate-final guard).
-            3. Append to ring buffer.
-            4. Forward to TaskSrvProvider for keyword scenario matching.
+            1. Ignore non-final unless we explicitly want partials.
+            2. Drop below ``min_confidence`` if the event reports one
+               (events without a score pass).
+            3. Strip + skip empty.
+            4. Dedupe against most recent within ``dedupe_window_s``
+               (Google STT sometimes emits duplicate finals).
+            5. Append to ring buffer.
+            6. Forward to TaskSrvProvider.on_audio for keyword matching.
         """
-        # TODO(REQ-44) [TASK-46]: strip + empty check
-        # TODO(REQ-44) [TASK-46]: dedupe against self._buffer[-1] within dedupe_window_s
-        # TODO(REQ-44) [TASK-46]: self._buffer.append(TranscriptEvent(text, ts))
-        # TODO(REQ-44) [TASK-46]: self._task_srv.on_audio(text, ts)
+        # TODO(REQ-44) [TASK-46]: drop !event.is_final unless partials wanted
+        # TODO(REQ-44) [TASK-46]: drop if event.confidence is not None and < min_confidence
+        # TODO(REQ-44) [TASK-46]: strip + empty check on event.text
+        # TODO(REQ-44) [TASK-46]: dedupe vs self._buffer[-1] within dedupe_window_s
+        # TODO(REQ-44) [TASK-46]: self._buffer.append(event)
+        # TODO(REQ-44) [TASK-46]: self._task_srv.on_audio(event.text, event.ts)
         raise NotImplementedError("SoundSensor.on_transcript: TBD [TASK-46]")
 
     # ------------------------------------------------------------------

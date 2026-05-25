@@ -69,11 +69,14 @@ def _build_runtime() -> _Runtime:
     """Construct + wire every component. Does NOT call ``.start()``."""
     rt = _Runtime()
 
-    # Providers
+    # Providers (each .bind() its UnitreeG1 dep before .start())
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
+    stt.bind(unitree_g1=unitree_g1)
     tts = TTSProvider(TTSConfig())
+    # TODO: tts.bind(unitree_g1=unitree_g1) once TTSProvider has bind()
     vla = VLAProvider(VLAConfig())
+    # TODO: vla.bind(unitree_g1=unitree_g1) once VLAProvider has bind()
     rt.providers = [unitree_g1, stt, tts, vla]
 
     # Connectors (plain OM1 ActionConnector instances)

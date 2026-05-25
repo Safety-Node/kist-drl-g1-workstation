@@ -35,7 +35,7 @@ TODO(REQ-32) [TASK-41]: reconnect strategy on LAN drop.
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .singleton import singleton
 
@@ -196,6 +196,30 @@ class UnitreeG1Provider:
     def estop(self) -> TopicCache:
         """Latest ``/bridge/safety/estop`` (EstopFlag from NX safety_monitor)."""
         return self._estop
+
+    # ------------------------------------------------------------------
+    # Push-style sensor subscriptions (for callers that need low-latency
+    # delivery rather than polling the TopicCache property)
+    # ------------------------------------------------------------------
+    def register_audio_callback(
+        self, callback: Callable[[bytes, float], None]
+    ) -> None:
+        """
+        Subscribe to ``/bridge/sensors/audio_pcm`` with a push callback
+        ``cb(pcm, ts)``. Used by STTProvider to avoid the polling latency
+        + duplicate-detection burden of reading the audio_pcm TopicCache.
+
+        Multi-subscriber; thread-safe (callback list under lock).
+        """
+        # TODO(REQ-32) [TASK-41]: append to subscriber list under lock
+        raise NotImplementedError("UnitreeG1Provider.register_audio_callback: TBD [TASK-41]")
+
+    def unregister_audio_callback(
+        self, callback: Callable[[bytes, float], None]
+    ) -> None:
+        """Remove ``callback``; no-op if not registered."""
+        # TODO(REQ-32) [TASK-41]: remove from subscriber list under lock
+        raise NotImplementedError("UnitreeG1Provider.unregister_audio_callback: TBD [TASK-41]")
 
     # ------------------------------------------------------------------
     # Health / stale helpers
