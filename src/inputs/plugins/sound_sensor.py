@@ -7,19 +7,20 @@ no Cortex prompt block anymore). Not a @singleton — one instance per mode.
 Subclasses OM1 ``FuserInput`` so it slots into ``mode_config.json5: agent_inputs[]``
 without framework changes. ``_poll`` / ``_raw_to_text`` are inert stubs — the
 live path is the STT callback fanning out to TaskSrvProvider.
-
-TODO(REQ-44) [TASK-46]: bind(stt, task_srv) + start() registers STT callback.
-TODO(REQ-44) [TASK-46]: on_transcript — dedupe + confidence filter + dispatch.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import Field
 
 from inputs.base import Message, SensorConfig
 from inputs.base.loop import FuserInput
 from providers.stt_provider import TranscriptEvent
+
+if TYPE_CHECKING:
+    from providers.stt_provider import STTProvider
+    from providers.task_srv_provider import TaskSrvProvider
 
 
 class SoundSensorConfig(SensorConfig):
@@ -71,8 +72,8 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         # transcript-history panel later wants N events, add buffer back
         # then (YAGNI for now).
         self._last_event: Optional[TranscriptEvent] = None
-        self._stt = None        # set by bind()
-        self._task_srv = None   # set by bind()
+        self._stt: Optional["STTProvider"] = None             # bind() sets this
+        self._task_srv: Optional["TaskSrvProvider"] = None    # bind() sets this
         self._started = False
         logging.info(
             "SoundSensor: skeleton initialized (min_conf=%.2f, dedupe_window=%.1fs)",
@@ -83,7 +84,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     # ------------------------------------------------------------------
     # Explicit dependency wiring (CONV-001 Option D)
     # ------------------------------------------------------------------
-    def bind(self, stt, task_srv) -> None:
+    def bind(self, stt: "STTProvider", task_srv: "TaskSrvProvider") -> None:
         """
         Wire dependencies after ``run.py`` has started both providers.
 
@@ -114,7 +115,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
                 "SoundSensor.start: call bind(stt=..., task_srv=...) first"
             )
         # TODO(REQ-44) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
-        # TODO(REQ-44) [TASK-46]: self._started = True
+        # TODO(REQ-44) [TASK-46]: self._started = True  # AFTER register succeeds — no partial-init flag
         raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")
 
     def stop(self) -> None:
