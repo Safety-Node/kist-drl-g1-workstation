@@ -62,7 +62,7 @@ class VLAConfig:
     backend: VLABackend = VLABackend.GROOT_N17
     # Connection to KIST Model Server (KIST owns server, we own client).
     model_server_url: str = "http://localhost:8000"
-    model_server_protocol: str = "http"      # "http" | "grpc"
+    model_server_protocol: Literal["http", "grpc"] = "http"
     # Per-request timeout. On exceeded: retry up to 2 times before failing
     # the sub-task (see TODO in module docstring); last-known chunk keeps
     # replaying during the retry window.
@@ -114,6 +114,10 @@ class VLAProvider:
         # returns the configured instance, not a default-config singleton.
         self._unitree_g1 = UnitreeG1Provider()
         self._current_chunk_id = 0
+        # Set by _on_estop callback; infer() gates on it (E-STOP active
+        # blocks all new dispatch until cleared + TaskSrvProvider decides
+        # what to do next).
+        self._estop_active = False
         logging.info(
             "VLAProvider: skeleton initialized (backend=%s, server=%s, "
             "chunk_hz=%.1f, replay_hz=%.1f, gearsonic=%s)",
@@ -179,7 +183,9 @@ class VLAProvider:
         #                         replay loop publishes them at 100 Hz
         raise NotImplementedError("VLAProvider.infer: TBD [TASK-40]")
 
-    def cancel_chunk(self, reason: str = "prompt change") -> None:
+    def cancel_chunk(
+        self, reason: Literal["prompt change", "estop"] = "prompt change"
+    ) -> None:
         """
         Drop the currently replaying chunk.
 
@@ -214,6 +220,17 @@ class VLAProvider:
     def current_chunk_id(self) -> int:
         """Most recently dispatched chunk_id; 0 before any infer()."""
         return self._current_chunk_id
+
+    # ------------------------------------------------------------------
+    # E-STOP push callback (registered with UnitreeG1Provider in start())
+    # ------------------------------------------------------------------
+    def _on_estop(self, active: bool, ts: float) -> None:
+        """E-STOP push callback. Cancel current chunk; gate future infer()."""
+        # TODO(REQ-39) [TASK-40]: self._estop_active = active
+        # TODO(REQ-39) [TASK-40]: if active: self.cancel_chunk(reason="estop")
+        # TODO(REQ-39) [TASK-40]: infer() must early-return when
+        #                         self._estop_active is True.
+        raise NotImplementedError("VLAProvider._on_estop: TBD [TASK-40]")
 
     # ------------------------------------------------------------------
     # Internals — GearSonic seam (CONV-007)
