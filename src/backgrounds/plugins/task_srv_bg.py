@@ -11,11 +11,12 @@ is bound + started.
 """
 
 import logging
-from typing import Optional
+import time
 
 from pydantic import Field
 
 from backgrounds.base import Background, BackgroundConfig
+from providers.task_srv_provider import TaskSrvProvider
 
 
 class TaskSrvBgConfig(BackgroundConfig):
@@ -23,6 +24,7 @@ class TaskSrvBgConfig(BackgroundConfig):
 
     tick_rate_hz: float = Field(
         default=10.0,
+        gt=0,
         description=(
             "Rate at which TaskSrvProvider.tick() is called. Should match "
             "or be a divisor of TaskSrvConfig.tick_rate_hz."
@@ -42,15 +44,14 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
     """
     Calls ``TaskSrvProvider().tick()`` at ``tick_rate_hz``.
 
-    The provider singleton is resolved lazily in ``run()`` rather than at
-    construction time so that ``run.py``'s explicit startup ordering
-    (CONV-001 Option D) is respected: BG instances may be constructed
-    before the provider is bound + started.
+    The provider singleton is resolved in ``run()`` (not __init__) so the
+    BG can be constructed before the provider is bound + started — startup
+    order ownership lives with run.py per CONV-001.
     """
 
     def __init__(self, config: TaskSrvBgConfig):
         super().__init__(config)
-        self._task_srv = None        # resolved lazily in run()
+        self._task_srv = None        # resolved in run() (singleton fetch)
         logging.info(
             "TaskSrvBg: skeleton initialized (tick=%.1fHz, swallow_exc=%s)",
             config.tick_rate_hz,
@@ -63,12 +64,9 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
         ``should_stop()`` returns True. Drift-free pacing via cumulative
         ``next_t`` so a slow tick doesn't permanently shift the schedule.
         """
-        import time as _time
-        from providers.task_srv_provider import TaskSrvProvider
-
         self._task_srv = TaskSrvProvider()  # already-started singleton
         period = 1.0 / float(self.config.tick_rate_hz)
-        next_t = _time.monotonic()
+        next_t = time.monotonic()
         logging.info(
             "TaskSrvBg: tick loop entering (period=%.3fs, swallow_exc=%s)",
             period, self.config.swallow_tick_exceptions,
@@ -83,13 +81,20 @@ class TaskSrvBg(Background[TaskSrvBgConfig]):
                     logging.exception("TaskSrvBg: tick() raised; exiting loop")
                     return
             next_t += period
-            dt = next_t - _time.monotonic()
+            dt = next_t - time.monotonic()
             if dt > 0:
                 if not self.sleep(dt):
                     return  # stop_event fired during sleep
             else:
                 # Overran the period; reset baseline so we don't tight-loop.
-                next_t = _time.monotonic()
+                # Log per CONV-009 (no pytest — logs are the verification
+                # surface). Persistent overruns mean tick_rate_hz is set
+                # higher than TaskSrvProvider.tick() can actually deliver.
+                logging.warning(
+                    "TaskSrvBg: tick overran period by %.1f ms; resetting baseline",
+                    -dt * 1000.0,
+                )
+                next_t = time.monotonic()
         logging.info("TaskSrvBg: tick loop exited (stop signalled)")
 
     def stop(self) -> None:

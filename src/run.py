@@ -5,8 +5,9 @@ Explicit Provider lifecycle: replaces OM1 ``ModeCortexRuntime`` since the
 KIST demo uses :class:`TaskSrvProvider` instead of an LLM Cortex (CONV-004).
 
 Startup order: UnitreeG1 → STT / TTS / VLA → Move/Speak connectors →
-TaskSrvProvider (bind + start loads scenarios) → SoundSensor (bind + start
-registers STT callback) → backgrounds (TaskSrvBg, GUIBackground).
+TaskSrvProvider (bind + start loads scenarios) → backgrounds (TaskSrvBg,
+GUIBackground) → SoundSensor (last — STT callbacks fan out only after the
+drain-side TaskSrvBg is alive).
 Shutdown is reverse-order. SIGINT/SIGTERM trigger the stop event.
 
 Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
@@ -14,12 +15,12 @@ Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
 """
 
 import argparse
-import asyncio
 import logging
 import signal
 import sys
 import threading
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Protocol
 
 import dotenv
 
@@ -35,6 +36,16 @@ from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider
 from providers.tts_provider import TTSConfig, TTSProvider
 from providers.unitree_g1_provider import UnitreeG1Provider
 from providers.vla_provider import VLAConfig, VLAProvider
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class Startable(Protocol):
+    """Provider / connector lifecycle contract used by the mini-runner."""
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +69,12 @@ class _Runtime:
     """Aggregate of all live components — for reverse-order shutdown."""
 
     def __init__(self) -> None:
-        self.providers: List[object] = []
+        # Base providers in dependency order. start() runs over this list
+        # left-to-right, stop() over reversed(). TaskSrvProvider is held in
+        # its own slot below because its start() also loads scenarios and
+        # must run AFTER every base provider it bind()s.
+        self.providers: List[Startable] = []
+        self.task_srv: Optional[TaskSrvProvider] = None
         self.sound_sensor: Optional[SoundSensor] = None
         self.backgrounds: List[Background] = []
         self.bg_threads: List[threading.Thread] = []
@@ -69,7 +85,7 @@ def _build_runtime() -> _Runtime:
     """Construct + wire every component. Does NOT call ``.start()``."""
     rt = _Runtime()
 
-    # Providers (each .bind() its UnitreeG1 dep before .start())
+    # Base providers (each .bind() its UnitreeG1 dep before .start())
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
     stt.bind(unitree_g1=unitree_g1)
@@ -86,21 +102,22 @@ def _build_runtime() -> _Runtime:
     #       method exists on the connector (currently scaffold).
     # TODO: SpeakConnector.bind(tts=tts) likewise.
 
-    # Orchestrator
-    task_srv = TaskSrvProvider(TaskSrvConfig())
-    task_srv.bind(
+    # Orchestrator (separate slot — started AFTER base providers since it
+    # binds them, and scenarios are loaded inside start()).
+    rt.task_srv = TaskSrvProvider(TaskSrvConfig())
+    rt.task_srv.bind(
         unitree_g1=unitree_g1,
         move_connector=move_conn,
         speak_connector=speak_conn,
     )
-    rt.providers.append(task_srv)
 
-    # STT → TaskSrv bridge
+    # STT → TaskSrv bridge. Started LAST (after backgrounds) so STT
+    # callbacks don't fan out before TaskSrvBg is alive to drain the
+    # inbound queue — see R4 in run.py review.
     sensor = SoundSensor(SoundSensorConfig())
-    sensor.bind(stt=stt, task_srv=task_srv)
+    sensor.bind(stt=stt, task_srv=rt.task_srv)
     rt.sound_sensor = sensor
 
-    # Backgrounds
     rt.backgrounds = [
         TaskSrvBg(TaskSrvBgConfig()),
         GUIBackground(BackgroundConfig()),
@@ -114,17 +131,17 @@ def _start_runtime(rt: _Runtime, dry_run: bool) -> None:
         logging.info("Dry run: skipping .start() on all components")
         return
 
-    for p in rt.providers[:-1]:  # all but TaskSrvProvider
+    for p in rt.providers:
         logging.info("Starting %s", type(p).__name__)
-        p.start()  # type: ignore[attr-defined]
-    # TaskSrvProvider.start() loads scenarios — must run last among providers
+        p.start()
+
+    assert rt.task_srv is not None
     logging.info("Starting TaskSrvProvider (loads scenarios)")
-    rt.providers[-1].start()  # type: ignore[attr-defined]
+    rt.task_srv.start()
 
-    assert rt.sound_sensor is not None
-    logging.info("Starting SoundSensor")
-    rt.sound_sensor.start()
-
+    # Backgrounds before SoundSensor (R4): once SoundSensor.start()
+    # registers the STT callback, transcripts must have a live drain on
+    # the other side or they queue up during the start gap.
     for bg in rt.backgrounds:
         bg.set_stop_event(rt.stop_event)
         t = threading.Thread(target=bg.run, name=type(bg).__name__, daemon=True)
@@ -132,31 +149,47 @@ def _start_runtime(rt: _Runtime, dry_run: bool) -> None:
         rt.bg_threads.append(t)
         logging.info("Started background thread: %s", type(bg).__name__)
 
+    assert rt.sound_sensor is not None
+    logging.info("Starting SoundSensor")
+    rt.sound_sensor.start()
 
-def _stop_runtime(rt: _Runtime) -> None:
-    """Reverse-order shutdown. Best-effort: a failing .stop() is logged not raised."""
+
+def _stop_runtime(rt: _Runtime) -> int:
+    """Reverse-order shutdown. Returns the number of .stop() failures."""
+    failures = 0
     rt.stop_event.set()
     for t in rt.bg_threads:
         t.join(timeout=2.0)
         if t.is_alive():
             logging.warning("Background thread %s did not stop within 2s", t.name)
+            failures += 1
 
-    if rt.sound_sensor is not None:
-        _safe_stop(rt.sound_sensor)
+    if rt.sound_sensor is not None and not _safe_stop(rt.sound_sensor):
+        failures += 1
+
+    if rt.task_srv is not None and not _safe_stop(rt.task_srv):
+        failures += 1
 
     for p in reversed(rt.providers):
-        _safe_stop(p)
+        if not _safe_stop(p):
+            failures += 1
+
+    return failures
 
 
-def _safe_stop(component: object) -> None:
+def _safe_stop(component: Startable) -> bool:
+    """Stop ``component``; return True on clean stop (or scaffold NotImpl)."""
     name = type(component).__name__
     try:
-        component.stop()  # type: ignore[attr-defined]
+        component.stop()
         logging.info("Stopped %s", name)
+        return True
     except NotImplementedError:
         logging.info("%s.stop() is still NotImplementedError (scaffold)", name)
+        return True
     except Exception:
         logging.exception("%s.stop() raised", name)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +208,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     _setup_logging(args.log_level)
-    dotenv.load_dotenv()
+    # Anchor .env at the repo root rather than cwd so the runner works no
+    # matter where the operator invokes it from.
+    dotenv.load_dotenv(dotenv_path=REPO_ROOT / ".env")
 
     rt = _build_runtime()
 
@@ -201,7 +236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     if args.dry_run:
-        logging.info("Dry run complete (%d providers, %d backgrounds wired)",
+        logging.info("Dry run complete (%d base providers + task_srv, %d backgrounds wired)",
                      len(rt.providers), len(rt.backgrounds))
         return 0
 
@@ -209,8 +244,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         rt.stop_event.wait()
     finally:
-        _stop_runtime(rt)
-    return 0
+        failures = _stop_runtime(rt)
+    # Non-zero exit when any component's .stop() raised (post-CONV-009 the
+    # log is the verification surface — also surface it through the exit code
+    # so demo wrappers / systemd can pick it up).
+    return 2 if failures else 0
 
 
 if __name__ == "__main__":
