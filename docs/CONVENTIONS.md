@@ -249,6 +249,47 @@ don't accumulate undocumented drift.
 
 ---
 
+## CONV-009 — HW-system-test-only verification; no pytest infra
+
+**Status**: Accepted · **Date**: 2026-05-25
+
+### Context
+3-person team, demo deadline. Maintaining a unit-test suite alongside
+scaffold churn was negative-ROI: the tests mostly asserted
+``NotImplementedError`` stubs and dataclass shapes that flux with every
+PR. Real correctness signal comes from running on the actual G1 + KAPEX
+setup and inspecting logs.
+
+### Decision
+- No ``pytest`` (removed dep, config, CI job, and ``tests/`` tree).
+- Verification = run the demo or the relevant sub-system on real
+  hardware; capture logs; attach the log path to the Notion Test page.
+- The Notion **Tests DB** is the authoritative test surface — each test
+  row has an "사전 조건 / 절차 / 기대 결과" triplet that maps to a
+  hardware run, not a function call.
+- Branch protection still enforces ``pr-meta.yml`` (branch + PR title
+  regex) — those are zero-maintenance.
+
+### Consequences
+- ✅ Zero test-maintenance overhead during scaffold churn.
+- ✅ Verification matches what actually matters (HW behaviour, not
+  Python type annotations).
+- ⚠️ Import-error regressions are caught only at ``run.py --dry-run``
+  time; we lose the cheap automated guard. Recommended habit: run
+  ``uv run python src/run.py --dry-run`` before pushing.
+- ⚠️ When LLM revives (CONV-004 reversal), the kept-but-untested
+  ``runtime/cortex.py`` / ``manager.py`` / ``llm/`` / ``fuser/`` have
+  no automated coverage; HW runs are again the verification surface.
+
+### Affected
+- Removed ``tests/`` tree, ``pytest*`` dev deps, ``[tool.pytest.*]``
+  and ``[tool.coverage.*]`` from ``pyproject.toml``.
+- Removed ``.github/workflows/ci.yml`` (unit-test was its only job;
+  lint had already been deferred per scaffold note).
+- ``pr-meta.yml`` retained.
+
+---
+
 ## Pattern for new conventions
 
 When a decision affects multiple tasks or future code review, add a new
