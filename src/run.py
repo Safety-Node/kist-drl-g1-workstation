@@ -93,7 +93,7 @@ def _build_runtime() -> _Runtime:
     # returns the run.py-built instance instead of creating a default one.
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
-    tts = TTSProvider(TTSConfig())
+    tts = TTSProvider(TTSConfig())  # CONV-010: __init__ fetches unitree_g1 (TBD)
     vla = VLAProvider(VLAConfig())
     rt.providers = [unitree_g1, stt, tts, vla]
 

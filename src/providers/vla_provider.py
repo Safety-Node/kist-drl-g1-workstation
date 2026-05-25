@@ -11,21 +11,40 @@ served by KIST Model Server.
 - GearSonic balance-correction lives inside this provider (CONV-007).
   Placement TBD (PC GPU / separate Jetson / NX); external interface stable.
 
-TODO(REQ-39) [TASK-40]: __init__ should fetch UnitreeG1Provider() (CONV-010);
-                        no bind() needed since dep is @singleton.
+Pipeline ordering (LOCKED for safety):
+    VLA chunk  →  GearSonic correct  →  safety clip  →  enqueue  →  publish
+GearSonic precedes the clip so the balance-corrected joint targets are still
+subject to the safety envelope; clipping the VLA output before GearSonic
+would let the balance stage produce out-of-envelope corrections silently.
+
 TODO(REQ-39) [TASK-40]: connect to KIST Model Server (gRPC/HTTP).
 TODO(REQ-31) [TASK-40]: obs assembly (RGB + 29-DoF joint + IMU base/ankle L/R).
 TODO(REQ-31) [TASK-40]: chunk decode → 100 Hz step replay + PC-side crossfade.
 TODO(REQ-43) [TASK-40]: GearSonic stage (spec deferred — KIST 단장님 학생들).
-TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) before publish.
+TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER GearSonic.
+TODO(REQ-39) [TASK-40]: E-STOP — start() subscribes self._on_estop via
+                        unitree_g1.register_estop_callback. On active=True:
+                        cancel_chunk() + block subsequent infer() calls.
+                        E-STOP clear does NOT auto-resume (TaskSrvProvider
+                        decides next scenario / posture).
+TODO(REQ-39) [TASK-40]: arm vs low joint split — define _ARM_JOINTS /
+                        _LOW_JOINTS frozensets (per ICD IF-6 + 2026-05-22
+                        lower-body addition) and route step joint subsets
+                        to publish_joint_cmd_arm / publish_joint_cmd_low.
+TODO(REQ-39) [TASK-40]: request_timeout_s policy — on model-server timeout
+                        the loop should retry up to 2x (~1 s total) before
+                        surfacing the failure to TaskSrvProvider; a single
+                        lag spike must NOT fail the sub-task. Last-known
+                        chunk keeps replaying during the retry window.
 """
 
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from .singleton import singleton
+from .unitree_g1_provider import UnitreeG1Provider
 
 
 class VLABackend(str, Enum):
@@ -44,15 +63,23 @@ class VLAConfig:
     # Connection to KIST Model Server (KIST owns server, we own client).
     model_server_url: str = "http://localhost:8000"
     model_server_protocol: str = "http"      # "http" | "grpc"
+    # Per-request timeout. On exceeded: retry up to 2 times before failing
+    # the sub-task (see TODO in module docstring); last-known chunk keeps
+    # replaying during the retry window.
     request_timeout_s: float = 1.0
     # Inference + replay rates (CONV-006).
     action_horizon: int = 16                 # steps per chunk
-    chunk_emit_rate_hz: float = 15.0         # GR00T property, fixed-ish
+    # GR00T model property — actual emission rate is set by model-server
+    # inference latency (~63.9 ms on L40 → ~15.6 Hz). Setting this value
+    # higher does NOT make the model emit faster; informational only,
+    # kept so config reviewers see the design assumption.
+    chunk_emit_rate_hz: float = 15.0
     step_replay_rate_hz: float = 100.0       # NX motor loop rate
     # GearSonic balance-correction stage (CONV-007 — spec deferred).
     gearsonic_enabled: bool = True           # identity passthrough until wired
-    gearsonic_device: str = "cuda:0"         # "cuda:0" | "cuda:1" | "cpu"
-    # Safety envelope (rejected before leaving the provider).
+    gearsonic_device: Literal["cuda:0", "cuda:1", "cpu"] = "cuda:0"
+    # Safety envelope (rejected before leaving the provider). Applied
+    # AFTER GearSonic per the pipeline-ordering lock above.
     joint_delta_clip_rad: float = 0.25
     # Auth / device for the local client side.
     api_key_env: str = "KIST_VLA_API_KEY"
@@ -82,8 +109,10 @@ class VLAProvider:
         """
         self._config = config or VLAConfig()
         self._running = False
-        # Bound late in start() so the UnitreeG1 Provider singleton is up.
-        self._unitree_g1 = None
+        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # run.py MUST construct UnitreeG1 before VLAProvider so this
+        # returns the configured instance, not a default-config singleton.
+        self._unitree_g1 = UnitreeG1Provider()
         self._current_chunk_id = 0
         logging.info(
             "VLAProvider: skeleton initialized (backend=%s, server=%s, "
@@ -99,17 +128,20 @@ class VLAProvider:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
-        """Connect to the KIST Model Server and bind to UnitreeG1 Provider."""
-        # TODO(REQ-39) [TASK-40]: resolve UnitreeG1 Provider singleton
+        """Connect to the KIST Model Server, subscribe E-STOP, spawn replay worker."""
         # TODO(REQ-39) [TASK-40]: open gRPC/HTTP client to model server
         # TODO(REQ-43) [TASK-40]: load GearSonic model (if local) or open
         #                         RPC to the remote device (if separate)
+        # TODO(REQ-39) [TASK-40]: self._unitree_g1.register_estop_callback(self._on_estop)
         # TODO(REQ-31) [TASK-40]: spawn step-replay worker thread @ 100 Hz
+        #     (see policy TODOs below for empty-queue / crossfade / preemption /
+        #     arm-low split)
         raise NotImplementedError("VLAProvider.start: TBD [TASK-40]")
 
     def stop(self) -> None:
         """Cancel in-flight inference, drain replay queue, close clients."""
-        # TODO(REQ-39) [TASK-40]: cancel request, join worker, close client
+        # TODO(REQ-39) [TASK-40]: unregister_estop_callback, cancel request,
+        #                         join worker, close client
         raise NotImplementedError("VLAProvider.stop: TBD [TASK-40]")
 
     # ------------------------------------------------------------------
@@ -139,16 +171,49 @@ class VLAProvider:
         """
         # TODO(REQ-31) [TASK-40]: snapshot obs from UnitreeG1 Provider
         # TODO(REQ-39) [TASK-40]: send (prompt, obs) to KIST Model Server
+        #                         (with request_timeout_s + retry policy)
         # TODO(REQ-43) [TASK-40]: pipe chunk through GearSonic stage
-        # TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad)
+        # TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER
+        #                         GearSonic per pipeline order lock
         # TODO(REQ-31) [TASK-40]: enqueue 16 steps with new chunk_id; the
-        #                         replay loop will publish them at 100 Hz
+        #                         replay loop publishes them at 100 Hz
         raise NotImplementedError("VLAProvider.infer: TBD [TASK-40]")
 
-    def cancel_chunk(self) -> None:
-        """Drop the currently replaying chunk (called on E-STOP / new prompt)."""
-        # TODO(REQ-31) [TASK-40]: flush replay queue, hold joint state
+    def cancel_chunk(self, reason: str = "prompt change") -> None:
+        """
+        Drop the currently replaying chunk.
+
+        Two semantics depending on ``reason``:
+
+        - ``"prompt change"`` (default — TaskSrvProvider switches sub-task):
+          flush the replay queue and **hold the last published JointCmd**
+          (re-publish at 100 Hz so NX keeps the current pose). The next
+          ``infer()`` will overwrite this with fresh steps.
+
+        - ``"estop"`` (E-STOP callback): flush the replay queue and
+          **publish a ``Damp`` LocoCommand** via UnitreeG1 — Unitree's
+          deterministic damp behaviour is the safe rest state. Do NOT
+          rely on hold-last-pose for E-STOP.
+
+        The two paths exist to avoid a footgun: holding the last
+        VLA-produced pose during E-STOP can sustain an unsafe joint
+        configuration (e.g. arm mid-reach); Damp puts the robot in a
+        known-safe state.
+        """
+        # TODO(REQ-31) [TASK-40]: flush replay queue
+        # TODO(REQ-31) [TASK-40]: if reason == "prompt change": switch worker
+        #                         to "republish last step" mode
+        # TODO(REQ-31) [TASK-40]: if reason == "estop":
+        #                         self._unitree_g1.publish_loco_cmd({"name":"Damp"})
         raise NotImplementedError("VLAProvider.cancel_chunk: TBD [TASK-40]")
+
+    # ------------------------------------------------------------------
+    # Read-only state (polled by GUI BG)
+    # ------------------------------------------------------------------
+    @property
+    def current_chunk_id(self) -> int:
+        """Most recently dispatched chunk_id; 0 before any infer()."""
+        return self._current_chunk_id
 
     # ------------------------------------------------------------------
     # Internals — GearSonic seam (CONV-007)
@@ -161,16 +226,39 @@ class VLAProvider:
         For now this is the seam where the model hooks in; default
         behaviour is identity passthrough so the rest of the pipeline
         can be built and tested.
+
+        When placement moves off-PC (separate Jetson / NX), this method's
+        *intent* stays the same (post-VLA balance correction); the
+        argument list grows to carry the IMU snapshot over the wire
+        (the remote process cannot see ``self._unitree_g1``).
         """
         # TODO(REQ-43) [TASK-40]: when spec lands, run model here:
-        #     corrected = self._gearsonic(chunk, imu_base, imu_ankle_l, imu_ankle_r)
-        # TODO(REQ-43) [TASK-40]: if placement moves off-PC (Jetson / NX),
-        #                         keep this method's signature; only the
-        #                         transport changes (local call → RPC).
+        #     corrected = self._gearsonic(
+        #         chunk, imu_base, imu_ankle_l, imu_ankle_r, joint_state,
+        #     )
+        # TODO(REQ-43) [TASK-40]: if placement moves off-PC, change call site
+        #     to RPC; signature grows by the IMU + joint_state args above.
         return chunk  # identity passthrough placeholder
 
     # ------------------------------------------------------------------
     # Internals — chunk → step unpack (CONV-006)
+    #
+    # Replay-worker policy decisions (LOCKED for the demo — implementer to
+    # follow):
+    #   - Empty queue (underflow): re-publish the last step at 100 Hz to
+    #     hold the pose; do NOT silently stop publishing.
+    #   - Chunk N → N+1 crossfade: 2-step linear blend between the last
+    #     step of N and the first step of N+1 (≈20 ms blend at 100 Hz).
+    #     PC-side per CONV-006; NX queue_aggregate stays OFF.
+    #   - Mid-chunk preemption: new infer() arriving while N is mid-replay
+    #     drops the rest of N immediately and the crossfade above blends
+    #     from the last-published step into N+1's first step (so the
+    #     crossfade rule applies whether the previous chunk was fully or
+    #     partially consumed).
+    #   - arm vs low split: each step's 29-DoF joint set is partitioned
+    #     into the IF-6 arm subset (publish_joint_cmd_arm) and the
+    #     2026-05-22 lower-body subset (publish_joint_cmd_low) using the
+    #     _ARM_JOINTS / _LOW_JOINTS frozensets to be defined per the ICD.
     # ------------------------------------------------------------------
     def _enqueue_chunk_steps(self, chunk: Any, chunk_id: int) -> None:
         """
@@ -180,7 +268,6 @@ class VLAProvider:
         ``motor_controller`` ring-buffer can detect chunk boundaries for
         the optional crossfade fallback (default OFF per CONV-006).
         """
-        # TODO(REQ-31) [TASK-40]: drain pending queue, push 16 fresh steps
-        # TODO(REQ-31) [TASK-40]: PC-side crossfade between chunk_id N and
-        #                         N+1 (canonical per CONV-006)
+        # TODO(REQ-31) [TASK-40]: implement per the policy block above
+        #     (underflow / crossfade / preemption / arm-low split).
         raise NotImplementedError("VLAProvider._enqueue_chunk_steps: TBD [TASK-40]")
