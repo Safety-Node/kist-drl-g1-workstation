@@ -3,16 +3,24 @@ TTS Provider [TASK-43, REQ-29]
 
 Vendor-agnostic Text-to-Speech. Default backend: Naver Clova Voice Premium REST.
 
-PC resamples Clova native 22050/24000 Hz → 16 kHz mono int16 before publishing
-to /bridge/cmd/audio_out (REQ-29 2026-05-15: PC resample responsibility).
-NX speaker_node consumes (relayed onboard as /onboard/audio/playback).
+PC resamples Clova native (22050 Hz or 24000 Hz — depends on the chosen
+voice id) → 16 kHz mono int16 before publishing to /bridge/cmd/audio_out
+(REQ-29 2026-05-15: PC resample responsibility). NX speaker_node consumes
+(relayed onboard as /onboard/audio/playback).
 
-TODO(REQ-29) [TASK-43]: __init__ should fetch UnitreeG1Provider() (CONV-010);
-                        no bind() needed since dep is @singleton.
+Echo-cancel: TTS only publishes — NX speaker_node raises
+``speaker_state.playing`` which STT consumes to mute its mic input. No
+active coordination needed here.
+
 TODO(REQ-29) [TASK-43]: synthesize — POST to Clova /tts (X-NCP-APIGW-API-KEY-*).
-TODO(REQ-29) [TASK-43]: resample 22050/24000 → 16000 Hz mono int16.
+TODO(REQ-29) [TASK-43]: resample (22050 or 24000) → 16000 Hz mono int16.
 TODO(REQ-29) [TASK-43]: publish via UnitreeG1.publish_audio_out.
 TODO(REQ-29) [TASK-43]: cancel() interrupts in-flight on E-STOP.
+TODO(REQ-29) [TASK-43]: E-STOP — start() subscribes self._on_estop via
+                        unitree_g1.register_estop_callback. On active=True:
+                        cancel() in-flight synth + drop queued. E-STOP clear
+                        does NOT auto-resume (G1 staying audible during E-STOP
+                        would confuse the operator).
 TODO(REQ-29) [TASK-43]: sentence-segment streaming (TTFB target < 600 ms).
 TODO(REQ-29) [TASK-43]: env keys NCP_CLOVA_CLIENT_ID / NCP_CLOVA_CLIENT_SECRET.
 """
@@ -23,6 +31,7 @@ from enum import Enum
 from typing import Optional
 
 from .singleton import singleton
+from .unitree_g1_provider import UnitreeG1Provider
 
 
 class TTSBackend(str, Enum):
@@ -40,13 +49,19 @@ class TTSConfig:
     backend: TTSBackend = TTSBackend.NAVER_CLOVA
     language_code: str = "ko-KR"          # KIST demo speaks Korean
     sample_rate_hz: int = 16000           # wire format: matches NX mic_node
-    voice: str = "nara"                   # Clova voice id
+    # Clova voice id (str, not Literal — vendor list is dozens long and
+    # changes; see https://api.ncloud-docs.com/docs/ai-naver-clovavoice).
+    voice: str = "nara"
     speed: int = 0                        # Clova [-5, +5] speed offset
     naver_api_url: str = (
         "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
     )
     client_id_env: str = "NCP_CLOVA_CLIENT_ID"
     client_secret_env: str = "NCP_CLOVA_CLIENT_SECRET"
+    # On timeout: log + drop. A missed audio cue is preferable to retry-
+    # induced desync with the sub-task flow ("성공했습니다" 5 s late).
+    # Diverges from VLA's 2x retry policy on purpose: TTS failure does
+    # not fail a sub-task, it just skips the announcement.
     request_timeout_s: float = 5.0
     sentence_streaming: bool = False      # split long text on sentence ends
 
@@ -71,9 +86,11 @@ class TTSProvider:
         """
         self._config = config or TTSConfig()
         self._running = False
-        # Bound late in start() so the UnitreeG1 Provider singleton is up.
-        self._unitree_g1 = None
-        self._inflight_request = None  # cancellation handle
+        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # run.py MUST construct UnitreeG1 before TTSProvider so this
+        # returns the configured instance, not a default-config singleton.
+        self._unitree_g1 = UnitreeG1Provider()
+        self._inflight_request = None  # cancellation handle for synth-in-progress
         logging.info(
             "TTSProvider: skeleton initialized (backend=%s, lang=%s, voice=%s, rate=%d)",
             self._config.backend.value,
@@ -86,47 +103,53 @@ class TTSProvider:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
-        """Open the HTTP session and bind to UnitreeG1 Provider audio out."""
-        # TODO(REQ-29) [TASK-43]: resolve UnitreeG1 Provider singleton
+        """Open the HTTP session and subscribe to UnitreeG1 E-STOP."""
         # TODO(REQ-29) [TASK-43]: read NCP credentials from env, fail-fast
         # TODO(REQ-29) [TASK-43]: open persistent aiohttp session w/ timeout
+        # TODO(REQ-29) [TASK-43]: self._unitree_g1.register_estop_callback(self._on_estop)
         raise NotImplementedError("TTSProvider.start: TBD [TASK-43]")
 
     def stop(self) -> None:
         """Close the HTTP session, cancel any in-flight synthesis."""
-        # TODO(REQ-29) [TASK-43]: cancel in-flight request, close session
+        # TODO(REQ-29) [TASK-43]: unregister_estop_callback, cancel in-flight, close session
         raise NotImplementedError("TTSProvider.stop: TBD [TASK-43]")
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(self, text: str) -> None:
         """
-        Synthesize ``text`` into PCM and push to the NX speaker.
+        Synthesize ``text`` and publish the PCM stream to NX (fire-and-forget).
 
-        Returns the synthesized PCM bytes (16 kHz mono int16) for callers
-        that want the raw audio (tests, logging). The provider also
-        publishes the bytes to the UnitreeG1 Provider audio-out path so
-        the NX speaker_node consumes them — callers do NOT need to
-        re-publish.
-
-        Parameters
-        ----------
-        text : str
-            UTF-8 input text (Korean preferred).
-
-        Returns
-        -------
-        bytes
-            16 kHz / 16-bit / mono PCM.
+        The caller path is ``SpeakConnector.connect`` → ``_schedule_coro`` →
+        here; the asyncio.Task return value is discarded. Hence ``None``
+        return — re-add raw bytes later if a real consumer needs them.
         """
         # TODO(REQ-29) [TASK-43]: build POST request to Clova /tts
         # TODO(REQ-29) [TASK-43]: stream response, decode MP3 → PCM if needed
-        # TODO(REQ-29) [TASK-43]: resample 22050/24000 → 16000 Hz mono
-        # TODO(REQ-29) [TASK-43]: push to UnitreeG1 Provider audio-out path
+        # TODO(REQ-29) [TASK-43]: resample 22050 or 24000 → 16000 Hz mono int16
+        # TODO(REQ-29) [TASK-43]: push to UnitreeG1.publish_audio_out
         raise NotImplementedError("TTSProvider.synthesize: TBD [TASK-43]")
 
     def cancel(self) -> None:
-        """Cancel any in-flight synthesis (called on E-STOP)."""
+        """Cancel any in-flight synthesis (called on E-STOP / stop())."""
         # TODO(REQ-29) [TASK-43]: abort aiohttp request, drain queued PCM
         raise NotImplementedError("TTSProvider.cancel: TBD [TASK-43]")
+
+    # ------------------------------------------------------------------
+    # Read-only state (polled by GUI BG)
+    # ------------------------------------------------------------------
+    @property
+    def is_speaking(self) -> bool:
+        """True while a synth → publish is in flight."""
+        return self._inflight_request is not None
+
+    # ------------------------------------------------------------------
+    # E-STOP push callback (registered with UnitreeG1Provider in start())
+    # ------------------------------------------------------------------
+    def _on_estop(self, active: bool, ts: float) -> None:
+        """E-STOP push callback. Cancel current synth; gate future synthesize()."""
+        # TODO(REQ-29) [TASK-43]: self._estop_active = active  (init in __init__ TBD)
+        # TODO(REQ-29) [TASK-43]: if active: self.cancel()
+        # TODO(REQ-29) [TASK-43]: synthesize() must early-return when E-STOP active
+        raise NotImplementedError("TTSProvider._on_estop: TBD [TASK-43]")
