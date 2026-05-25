@@ -52,8 +52,6 @@ macos = ["osascript"]
 dev = [
     "black==26.3.1",
     "isort==6.0.0",
-    "pre-commit==4.1.0",
-    "pyright==1.1.408",
     "ruff==0.9.3",
     "vulture==2.14",
 ]
