@@ -27,22 +27,37 @@ Publishes (Reliable):
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
 (navigation pkg removed 2026-05-22).
 
-TODO(REQ-32) [TASK-41]: rclpy init + subscribe with QoS above + TopicCache update.
-TODO(REQ-33) [TASK-41]: publish methods + comm_bridge_alive() heartbeat watchdog.
+TODO(REQ-32) [TASK-41]: rclpy init + subscribe with QoS above. DDS callbacks
+                        REPLACE the TopicCache attribute with a fresh instance
+                        (frozen dataclass → atomic ref swap; never mutate in
+                        place).
+TODO(REQ-33) [TASK-41]: publish methods + comm_bridge_alive() watchdog.
+                        Watchdog fail must LOG + DROP, never raise — callers
+                        (VLA, TTS) are fire-and-forget via _schedule_coro and
+                        cannot retrieve exceptions.
 TODO(REQ-32) [TASK-41]: reconnect strategy on LAN drop.
+TODO(REQ-32) [TASK-41]: register_estop_callback push API for ≤200 ms E-STOP
+                        propagation budget — polling via TaskSrvBg.tick (10 Hz,
+                        100 ms period) is borderline.
 """
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional, TypedDict
 
 from .singleton import singleton
 
 
-@dataclass
+@dataclass(frozen=True)
 class TopicCache:
     """Last-known value + monotonic timestamp for a single subscribed topic.
+
+    **Immutable**: DDS callbacks must replace the parent attribute with a
+    fresh ``TopicCache(...)`` instance rather than mutating fields in place.
+    Single attribute assignment is atomic under the GIL; readers in other
+    threads see either the old or the new full instance, never a half-update
+    where ``last_seen_ts`` is new but ``value`` is still old.
 
     A fresh TopicCache (``last_seen_ts == 0.0``) is treated as stale by
     :meth:`stale` so downstream code can guard against "never received yet".
@@ -54,6 +69,31 @@ class TopicCache:
     def stale(self, now: float, ttl_s: float) -> bool:
         """True if no message received within ``ttl_s`` of ``now``."""
         return (self.last_seen_ts == 0.0) or ((now - self.last_seen_ts) > ttl_s)
+
+
+# Outbound command payload shapes. TypedDict gives pyright / IDE help at
+# call sites (VLA Provider's chunk → step unpack, MoveConnector's loco
+# dispatch) without the runtime cost of a Pydantic model — DDS serialisation
+# does the final validation.
+class JointCmd(TypedDict):
+    """Per-step joint command (IF-6 upper body / NEW 2026-05-22 lower body)."""
+
+    joint_names: List[str]
+    q: List[float]
+    dq: List[float]
+    kp: List[float]
+    kd: List[float]
+    tau_ff: List[float]
+    mode: int
+    weight: float          # respected on arm path; ignored on low path
+    chunk_id: int          # CONV-006 chunk boundary detection on NX
+    step_index: int        # 0..15 within the 16-step chunk
+
+
+class LocoCommand(TypedDict):
+    """High-level posture transition for Unitree LocoClient."""
+
+    name: str              # "StandUp" | "SitDown" | "Damp" | "BalanceStand"
 
 
 @singleton
@@ -80,9 +120,13 @@ class UnitreeG1Provider:
         ros_domain_id : int
             ROS_DOMAIN_ID shared with the G1 onboard via comm_bridge.
         cyclonedds_uri : str, optional
-            File URI to ``cyclonedds.xml`` (partition filter).
+            File URI to ``cyclonedds.xml`` (partition filter). When None,
+            start() should read ``CYCLONEDDS_URI`` env var, then fall back
+            to the repo's ``cyclonedds/cyclonedds.xml``. TODO(REQ-32).
         comm_bridge_host : str, optional
-            IP/hostname of the Orin NX running comm_bridge (logging/diagnostics).
+            IP/hostname of the Orin NX running comm_bridge (logging /
+            diagnostics only — discovery is multicast). When None, host-
+            targeted log lines are skipped. TODO(REQ-32).
         heartbeat_timeout_ms : int
             Max age of last comm_bridge heartbeat before outbound cmds are blocked.
         sensor_ttl_ms : int
@@ -184,7 +228,13 @@ class UnitreeG1Provider:
     # ------------------------------------------------------------------
     @property
     def buf_state(self) -> TopicCache:
-        """Latest ``/bridge/motor/buf_state`` (motor ring buffer telemetry)."""
+        """
+        Latest ``/bridge/motor/buf_state`` (motor ring buffer telemetry).
+
+        Consumer (TBD): VLA Provider should poll this to detect ring-buffer
+        near-empty and proactively re-trigger ``infer()`` so the step-replay
+        queue never underflows during a 16-step chunk window.
+        """
         return self._buf_state
 
     @property
@@ -221,45 +271,79 @@ class UnitreeG1Provider:
         # TODO(REQ-32) [TASK-41]: remove from subscriber list under lock
         raise NotImplementedError("UnitreeG1Provider.unregister_audio_callback: TBD [TASK-41]")
 
+    def register_estop_callback(
+        self, callback: Callable[[bool, float], None]
+    ) -> None:
+        """
+        Subscribe to ``/bridge/safety/estop`` with a push callback
+        ``cb(active, ts)``. Push (not poll) so consumers (TaskSrvProvider /
+        VLA Provider) can hit the ≤200 ms E-STOP propagation budget — a
+        TaskSrvBg poll at 10 Hz would burn up to 100 ms of that budget on
+        its own.
+        """
+        # TODO(REQ-32) [TASK-41]: append to subscriber list under lock
+        raise NotImplementedError("UnitreeG1Provider.register_estop_callback: TBD [TASK-41]")
+
+    def unregister_estop_callback(
+        self, callback: Callable[[bool, float], None]
+    ) -> None:
+        """Remove ``callback``; no-op if not registered."""
+        raise NotImplementedError("UnitreeG1Provider.unregister_estop_callback: TBD [TASK-41]")
+
     # ------------------------------------------------------------------
     # Health / stale helpers
     # ------------------------------------------------------------------
     def comm_bridge_alive(self) -> bool:
-        """True if any ``/bridge/*`` topic was seen within ``heartbeat_timeout_ms``."""
-        # TODO(REQ-33) [TASK-41]: aggregate latest timestamps across caches
+        """
+        True if any **Reliable** ``/bridge/*`` topic was seen within
+        ``heartbeat_timeout_ms``. BestEffort sensors (audio_pcm, IMU,
+        joint_states) are excluded — they keep flowing from publisher cache
+        even if comm_bridge has hung, so they are not a true liveness
+        signal. Reliable topics (estop, buf_state, speaker_state) require
+        the bridge to be actively forwarding to advance ``last_seen_ts``.
+        """
+        # TODO(REQ-33) [TASK-41]: aggregate latest timestamps across the
+        #                          Reliable caches only (estop, buf_state,
+        #                          speaker_state).
         raise NotImplementedError("UnitreeG1Provider.comm_bridge_alive: TBD [TASK-41]")
 
     # ------------------------------------------------------------------
     # Publishers (cmd outbound, Reliable)
+    #
+    # All publish methods MUST be log-and-drop on comm_bridge_alive() == False
+    # — the upstream callers (VLA / TTS / MoveConnector via TaskSrvProvider
+    # _schedule_coro) are fire-and-forget asyncio.Tasks and cannot retrieve
+    # an exception raised here.
     # ------------------------------------------------------------------
-    def publish_joint_cmd_arm(self, joint_cmd: dict) -> None:
+    def publish_joint_cmd_arm(self, joint_cmd: JointCmd) -> None:
         """
         Publish a Joint Cmd Upper Body (rt/arm_sdk path) to ``/bridge/cmd/arm``.
 
-        ICD IF-6. Fields: ``joint_names[]``, ``q[]``, ``dq[]``, ``kp[]``,
-        ``kd[]``, ``tau_ff[]``, ``mode``, ``weight``, ``chunk_id``, ``step_index``.
-        Weight respected on NX side (motor_cmd[29].q ramp).
+        ICD IF-6. Weight respected on NX side (motor_cmd[29].q ramp).
         """
-        # TODO(REQ-33) [TASK-41]: schema validate, comm_bridge_alive() watchdog, publish
+        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
+        # TODO(REQ-33) [TASK-41]: serialize JointCmd → g1_onboard_msgs/JointCmd, publish
         raise NotImplementedError("UnitreeG1Provider.publish_joint_cmd_arm: TBD [TASK-41]")
 
-    def publish_joint_cmd_low(self, joint_cmd: dict) -> None:
+    def publish_joint_cmd_low(self, joint_cmd: JointCmd) -> None:
         """
         Publish a Joint Cmd Lower Body (rt/lowcmd path) to ``/bridge/cmd/low``.
 
         NEW 2026-05-22 (whole-body VLA walking). Weight ignored on NX side.
         """
-        # TODO(REQ-33) [TASK-41]: schema validate, watchdog, publish
+        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
+        # TODO(REQ-33) [TASK-41]: serialize + publish
         raise NotImplementedError("UnitreeG1Provider.publish_joint_cmd_low: TBD [TASK-41]")
 
-    def publish_loco_cmd(self, loco_command: dict) -> None:
+    def publish_loco_cmd(self, loco_command: LocoCommand) -> None:
         """
         Publish a LocoCommand to ``/bridge/cmd/loco``.
 
-        Usage scope TBD (likely demo entry/exit — StandUp / BalanceStand /
-        SitDown / Damp — plus posture transitions; not finalized per 2026-05-22).
+        Used by MoveConnector for posture transitions (StandUp / SitDown /
+        Damp / BalanceStand) — see ``_LOCO_MAP`` in move_connector.py.
         """
-        # TODO(REQ-33) [TASK-41]: schema validate, publish
+        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
+        # TODO(REQ-33) [TASK-41]: serialize + publish
         raise NotImplementedError("UnitreeG1Provider.publish_loco_cmd: TBD [TASK-41]")
 
     def publish_audio_out(self, pcm: bytes) -> None:
@@ -267,5 +351,6 @@ class UnitreeG1Provider:
         Publish synthesized PCM audio to ``/bridge/cmd/audio_out`` (onboard speaker).
         TTS Provider → Speak Connector → here.
         """
-        # TODO(REQ-29) [TASK-41]: chunking + flow control + watchdog
+        # TODO(REQ-29) [TASK-41]: if not self.comm_bridge_alive(): log + drop
+        # TODO(REQ-29) [TASK-41]: chunking + flow control + publish
         raise NotImplementedError("UnitreeG1Provider.publish_audio_out: TBD [TASK-41]")
