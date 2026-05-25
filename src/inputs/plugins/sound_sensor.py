@@ -10,17 +10,14 @@ live path is the STT callback fanning out to TaskSrvProvider.
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from pydantic import Field
 
 from inputs.base import Message, SensorConfig
 from inputs.base.loop import FuserInput
-from providers.stt_provider import TranscriptEvent
-
-if TYPE_CHECKING:
-    from providers.stt_provider import STTProvider
-    from providers.task_srv_provider import TaskSrvProvider
+from providers.stt_provider import STTProvider, TranscriptEvent
+from providers.task_srv_provider import TaskSrvProvider
 
 
 class SoundSensorConfig(SensorConfig):
@@ -49,9 +46,12 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     """
     Bridges STT Provider transcripts into TaskSrvProvider keyword routing.
 
-    Lifecycle: not a singleton. ``run.py`` constructs one instance, calls
-    ``bind(stt=..., task_srv=...)``, then ``start()``. ``stop()`` unwires
-    the STT callback.
+    Not a singleton. ``run.py`` constructs one instance and calls
+    ``start()``. ``stop()`` unwires the STT callback.
+
+    Both deps (STTProvider, TaskSrvProvider) are @singletons; per CONV-010
+    they are fetched in ``__init__``. ``run.py`` MUST construct both
+    Providers before this SoundSensor.
 
     **Lifecycle discipline**: always call ``stop()`` before re-creating an
     instance. STT's transcript callback list holds bound methods — an
@@ -72,8 +72,10 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         # transcript-history panel later wants N events, add buffer back
         # then (YAGNI for now).
         self._last_event: Optional[TranscriptEvent] = None
-        self._stt: Optional["STTProvider"] = None             # bind() sets this
-        self._task_srv: Optional["TaskSrvProvider"] = None    # bind() sets this
+        # CONV-010: deps are @singletons. run.py MUST have constructed
+        # both Providers before this SoundSensor.
+        self._stt = STTProvider()
+        self._task_srv = TaskSrvProvider()
         self._started = False
         logging.info(
             "SoundSensor: skeleton initialized (min_conf=%.2f, dedupe_window=%.1fs)",
@@ -82,38 +84,10 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         )
 
     # ------------------------------------------------------------------
-    # Explicit dependency wiring (CONV-001 Option D)
-    # ------------------------------------------------------------------
-    def bind(self, stt: "STTProvider", task_srv: "TaskSrvProvider") -> None:
-        """
-        Wire dependencies after ``run.py`` has started both providers.
-
-        Per CONV-001 the caller (``run.py``) owns startup ordering — we
-        only check the references are non-None at ``start()`` time
-        (bound, not necessarily ``.started()``).
-
-        Parameters
-        ----------
-        stt : STTProvider
-            STT Provider singleton. SoundSensor will call
-            ``stt.register_transcript_callback(self.on_transcript)`` in
-            ``start()``.
-        task_srv : TaskSrvProvider
-            TaskSrvProvider singleton. SoundSensor pushes transcripts via
-            ``task_srv.on_audio(text, ts)``.
-        """
-        self._stt = stt
-        self._task_srv = task_srv
-
-    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Register transcript callback with STT Provider, ready buffer."""
-        if self._stt is None or self._task_srv is None:
-            raise RuntimeError(
-                "SoundSensor.start: call bind(stt=..., task_srv=...) first"
-            )
         # TODO(REQ-44) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
         # TODO(REQ-44) [TASK-46]: self._started = True  # AFTER register succeeds — no partial-init flag
         raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")

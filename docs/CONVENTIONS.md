@@ -290,42 +290,50 @@ setup and inspecting logs.
 
 ---
 
-## CONV-010 — DI pattern split: Providers use bind(), Connectors use singleton fetch
+## CONV-010 — DI by singleton-fetch; bind() only when deps aren't singletons
 
 **Status**: Accepted · **Date**: 2026-05-25
 
 ### Context
-Providers (STT, TTS, VLA, UnitreeG1, TaskSrv) have lifecycle
-(``start`` / ``stop`` / ``state``) and explicit dependencies that must be
-wired before ``start()``. Connectors (MoveConnector, SpeakConnector) are
-stateless routing adapters with no lifecycle of their own. Forcing the
-same ``bind()`` ceremony on both blurred the categories and bloated
-``run.py`` wiring without adding safety.
+Early scaffold inconsistently applied ``bind(...)`` to STT, SoundSensor,
+TaskSrvProvider on the rationale "CONV-001 explicit DI". That conflated
+two things: CONV-001 owns *lifecycle order* (when ``start()`` runs), not
+*DI mechanism* (how a component obtains its deps). For every dep that is
+itself a ``@singleton``, ``bind`` is pure ceremony — ``Provider()`` from
+the consumer's ``__init__`` returns the same instance ``run.py`` built.
 
 ### Decision
-- **Providers / Sensors**: ``bind(...)`` from ``run.py``; validated in
-  ``start()`` with ``RuntimeError`` on missing deps. CONV-001 governs
-  the lifecycle.
-- **Connectors**: dependencies fetched in ``__init__`` via ``@singleton``
-  (``self._vla = VLAProvider()``). No ``bind()``. Relies on CONV-001
-  ordering — ``run.py`` MUST construct each Provider before any
-  Connector that references it.
-- **Backgrounds**: dependency fetched in ``run()`` (resolved at thread
-  start, not at ctor time), same singleton pattern as Connectors. See
-  ``TaskSrvBg.run`` (``self._task_srv = TaskSrvProvider()``).
+The real split is **whether the dep is a ``@singleton``**:
+
+- **@singleton dep** → consumer fetches in ``__init__`` (or ``run()`` for
+  background threads):
+  ``self._dep = DepProvider()``
+  No ``bind`` method, no ``start()`` RuntimeError guard for that dep.
+- **Non-singleton dep** (plain instances — currently the two
+  ``ActionConnector`` subclasses, ``MoveConnector`` / ``SpeakConnector``)
+  → ``run.py`` is the only context that can hand the instance over;
+  the consumer exposes ``bind(...)`` and validates in ``start()``.
+
+In KIST today only **``TaskSrvProvider.bind(move_connector,
+speak_connector)``** survives because the Connectors are plain instances.
+Every other consumer (STT, TTS, VLA, SoundSensor, TaskSrvBg, the
+Connectors themselves) fetches its deps via singleton.
+
+CONV-001 still owns startup order: each Provider must be **constructed**
+in ``run.py`` before any consumer that references it.
 
 ### Consequences
-- ✅ ``run.py`` Connector wiring stays compact (1 line per connector).
-- ✅ Single source of truth for "what does X depend on": Provider/Sensor
-  shows it on the ``bind()`` signature; Connector/Background shows it
-  in the singleton fetch lines.
-- ⚠️ Footgun: if a Connector is constructed **before** its Provider in
-  ``run.py`` by mistake, the ``VLAProvider()`` call inside the Connector
-  creates the singleton with default config; the later
-  ``VLAProvider(VLAConfig(...))`` in ``run.py`` silently returns that
-  already-built instance and the custom config is dropped. Defense:
-  ``run.py`` construction order is load-bearing — preserve it when
-  refactoring.
+- ✅ One rule to teach: "if the dep is a Provider, just ``()`` it."
+- ✅ ``run.py`` wiring shrinks (no ``stt.bind``, no ``sensor.bind``).
+- ✅ One bind signature left to maintain (``TaskSrvProvider.bind``).
+- ⚠️ Footgun: constructing a consumer **before** its Provider in
+  ``run.py`` means the consumer's ``__init__`` creates the singleton
+  with **default** config; the subsequent
+  ``Provider(custom_config)`` silently returns the same default-config
+  instance and the custom config is dropped. CONV-001 construction
+  order is load-bearing — preserve it when refactoring ``run.py``.
+- ⚠️ No automated test catches mis-ordered ``run.py`` after CONV-009;
+  ``run.py --dry-run`` exercises the order and is the cheap gate.
 
 ---
 

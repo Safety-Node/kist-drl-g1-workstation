@@ -24,6 +24,7 @@ from actions.move.interface import MoveInput
 from actions.speak.interface import SpeakInput
 
 from .singleton import singleton
+from .unitree_g1_provider import UnitreeG1Provider
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +203,9 @@ class TaskSrvProvider:
         self._active_scenario: Optional[Scenario] = None
         self._active_sub_task_idx: int = -1
         self._sub_task_dispatch_ts: float = 0.0
-        self._unitree_g1 = None
+        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # MoveConnector / SpeakConnector are plain instances → bind() below.
+        self._unitree_g1 = UnitreeG1Provider()
         self._move_connector = None
         self._speak_connector = None
         # _running distinguishes IDLE-armed (running=True, state=IDLE, waiting
@@ -226,12 +229,16 @@ class TaskSrvProvider:
     # ------------------------------------------------------------------
     def bind(
         self,
-        unitree_g1: Any,
         move_connector: Any,
         speak_connector: Optional[Any] = None,
     ) -> None:
-        """Wire dependencies from run.py before ``start()`` is called."""
-        self._unitree_g1 = unitree_g1
+        """
+        Wire the non-singleton dependencies from run.py before ``start()``.
+
+        Only Connectors are passed here per CONV-010 — UnitreeG1Provider is
+        a @singleton fetched in ``__init__``. SpeakConnector stays optional
+        because spoken feedback can be disabled via TaskSrvConfig.
+        """
         self._move_connector = move_connector
         self._speak_connector = speak_connector
 
@@ -246,9 +253,9 @@ class TaskSrvProvider:
         are imported from ``config.scenarios.ALL`` (lazy import to avoid a
         hard dependency at module load time).
         """
-        if self._unitree_g1 is None or self._move_connector is None:
+        if self._move_connector is None:
             raise RuntimeError(
-                "TaskSrvProvider.start: call bind(unitree_g1=..., move_connector=...) first"
+                "TaskSrvProvider.start: call bind(move_connector=...) first"
             )
         if scenarios is None:
             from config.scenarios import ALL as _ALL

@@ -26,12 +26,10 @@ import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import Callable, List, Optional
 
 from .singleton import singleton
-
-if TYPE_CHECKING:
-    from .unitree_g1_provider import UnitreeG1Provider
+from .unitree_g1_provider import UnitreeG1Provider
 
 
 class STTBackend(str, Enum):
@@ -100,7 +98,10 @@ class STTProvider:
     def __init__(self, config: Optional[STTConfig] = None):
         self._config = config or STTConfig()
         self._state = STTState.IDLE   # running == (state != IDLE); no separate flag
-        self._unitree_g1: Optional["UnitreeG1Provider"] = None  # bind() sets this
+        # CONV-010: dep is a @singleton, fetched here. run.py MUST construct
+        # UnitreeG1Provider first, otherwise we create it with default config
+        # and run.py's later UnitreeG1Provider(...) returns this same instance.
+        self._unitree_g1 = UnitreeG1Provider()
         self._callbacks: List[Callable[[TranscriptEvent], None]] = []
         self._callbacks_lock = threading.Lock()
         logging.info(
@@ -111,21 +112,10 @@ class STTProvider:
         )
 
     # ------------------------------------------------------------------
-    # Explicit dependency wiring (CONV-001)
-    # ------------------------------------------------------------------
-    def bind(self, unitree_g1: "UnitreeG1Provider") -> None:
-        """Wire dependencies from run.py before ``start()``."""
-        self._unitree_g1 = unitree_g1
-
-    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Open the STT streaming session and bind to UnitreeG1 audio + speaker_state."""
-        if self._unitree_g1 is None:
-            raise RuntimeError(
-                "STTProvider.start: call bind(unitree_g1=...) first"
-            )
         # TODO(REQ-27) [TASK-42]: unitree_g1.register_audio_callback(self._on_audio_chunk)
         # TODO(REQ-27) [TASK-42]: open gRPC bidi stream to Google Cloud Speech v2
         # TODO(REQ-27) [TASK-42]: spawn worker (audio push + transcript pull)

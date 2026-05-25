@@ -4,10 +4,12 @@ KIST DRL G1 Workstation entrypoint (mini-runner per CONV-001).
 Explicit Provider lifecycle: replaces OM1 ``ModeCortexRuntime`` since the
 KIST demo uses :class:`TaskSrvProvider` instead of an LLM Cortex (CONV-004).
 
-Startup order: UnitreeG1 → STT / TTS / VLA → Move/Speak connectors →
-TaskSrvProvider (bind + start loads scenarios) → backgrounds (TaskSrvBg,
-GUIBackground) → SoundSensor (last — STT callbacks fan out only after the
-drain-side TaskSrvBg is alive).
+Startup order (CONV-001 + CONV-010): UnitreeG1 → STT / TTS / VLA →
+Move/Speak connectors → TaskSrvProvider (bind connectors, start loads
+scenarios) → backgrounds (TaskSrvBg, GUIBackground) → SoundSensor (last —
+STT callbacks fan out only after the drain-side TaskSrvBg is alive).
+All other Provider deps are @singletons fetched in consumer __init__;
+the construction order above is load-bearing per CONV-010.
 Shutdown is reverse-order. SIGINT/SIGTERM trigger the stop event.
 
 Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
@@ -85,14 +87,14 @@ def _build_runtime() -> _Runtime:
     """Construct + wire every component. Does NOT call ``.start()``."""
     rt = _Runtime()
 
-    # Base providers (each .bind() its UnitreeG1 dep before .start())
+    # Base providers. All Provider→Provider deps are @singletons (CONV-010),
+    # so STT/TTS/VLA fetch UnitreeG1 inside their own __init__. The only
+    # requirement is that UnitreeG1 is constructed FIRST so that fetch
+    # returns the run.py-built instance instead of creating a default one.
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
-    stt.bind(unitree_g1=unitree_g1)
     tts = TTSProvider(TTSConfig())
-    # TODO: tts.bind(unitree_g1=unitree_g1) once TTSProvider has bind()
     vla = VLAProvider(VLAConfig())
-    # TODO: vla.bind(unitree_g1=unitree_g1) once VLAProvider has bind()
     rt.providers = [unitree_g1, stt, tts, vla]
 
     # Connectors. They are stateless adapters with no lifecycle of their
@@ -103,20 +105,15 @@ def _build_runtime() -> _Runtime:
     speak_conn = SpeakConnector(ActionConfig())
 
     # Orchestrator (separate slot — started AFTER base providers since it
-    # binds them, and scenarios are loaded inside start()).
+    # binds the non-singleton Connectors and loads scenarios inside start()).
     rt.task_srv = TaskSrvProvider(TaskSrvConfig())
-    rt.task_srv.bind(
-        unitree_g1=unitree_g1,
-        move_connector=move_conn,
-        speak_connector=speak_conn,
-    )
+    rt.task_srv.bind(move_connector=move_conn, speak_connector=speak_conn)
 
-    # STT → TaskSrv bridge. Started LAST (after backgrounds) so STT
-    # callbacks don't fan out before TaskSrvBg is alive to drain the
-    # inbound queue — see R4 in run.py review.
-    sensor = SoundSensor(SoundSensorConfig())
-    sensor.bind(stt=stt, task_srv=rt.task_srv)
-    rt.sound_sensor = sensor
+    # STT → TaskSrv bridge. SoundSensor fetches STT + TaskSrv as singletons
+    # in its own __init__ (CONV-010). Started LAST (after backgrounds) so
+    # STT callbacks don't fan out before TaskSrvBg is alive to drain the
+    # inbound queue (R4).
+    rt.sound_sensor = SoundSensor(SoundSensorConfig())
 
     rt.backgrounds = [
         TaskSrvBg(TaskSrvBgConfig()),

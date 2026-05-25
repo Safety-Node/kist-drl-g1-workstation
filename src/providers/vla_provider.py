@@ -11,7 +11,8 @@ served by KIST Model Server.
 - GearSonic balance-correction lives inside this provider (CONV-007).
   Placement TBD (PC GPU / separate Jetson / NX); external interface stable.
 
-TODO(REQ-39) [TASK-40]: bind(unitree_g1) + start() RuntimeError guard (mirror STT).
+TODO(REQ-39) [TASK-40]: __init__ should fetch UnitreeG1Provider() (CONV-010);
+                        no bind() needed since dep is @singleton.
 TODO(REQ-39) [TASK-40]: connect to KIST Model Server (gRPC/HTTP).
 TODO(REQ-31) [TASK-40]: obs assembly (RGB + 29-DoF joint + IMU base/ankle L/R).
 TODO(REQ-31) [TASK-40]: chunk decode → 100 Hz step replay + PC-side crossfade.

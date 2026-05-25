@@ -7,7 +7,8 @@ PC resamples Clova native 22050/24000 Hz → 16 kHz mono int16 before publishing
 to /bridge/cmd/audio_out (REQ-29 2026-05-15: PC resample responsibility).
 NX speaker_node consumes (relayed onboard as /onboard/audio/playback).
 
-TODO(REQ-29) [TASK-43]: bind(unitree_g1) + start() RuntimeError guard (mirror STT).
+TODO(REQ-29) [TASK-43]: __init__ should fetch UnitreeG1Provider() (CONV-010);
+                        no bind() needed since dep is @singleton.
 TODO(REQ-29) [TASK-43]: synthesize — POST to Clova /tts (X-NCP-APIGW-API-KEY-*).
 TODO(REQ-29) [TASK-43]: resample 22050/24000 → 16000 Hz mono int16.
 TODO(REQ-29) [TASK-43]: publish via UnitreeG1.publish_audio_out.
