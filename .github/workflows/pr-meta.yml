@@ -22,12 +22,14 @@ jobs:
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
-          if [[ ! "$BRANCH" =~ ^TASK-[0-9]+$ ]]; then
-            echo "::error::Branch name '$BRANCH' must match TASK-{number} (no suffix)"
+          if [[ ! "$BRANCH" =~ ^(TASK-[0-9]+|chore/.+)$ ]]; then
+            echo "::error::Branch name '$BRANCH' must match TASK-{number} (Notion-linked work) or chore/{description} (non-task housekeeping)"
             echo ""
             echo "Examples that pass:"
             echo "  TASK-42"
             echo "  TASK-7"
+            echo "  chore/fix-typo-in-readme"
+            echo "  chore/bump-cyclonedds-dep"
             echo ""
             echo "Examples that fail:"
             echo "  TASK-42-add-tts-provider  (suffix not allowed)"
@@ -49,14 +51,16 @@ jobs:
           # Format: [TASK-{number}] <type>(<scope>)?: <lowercase subject>
           # Type set follows Conventional Commits.
           # Regex held in a variable so backslash-escaped literals survive bash parsing.
-          re='^\[TASK-[0-9]+\] (feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9_-]+\))?!?: [a-z].+$'
+          re='^(\[TASK-[0-9]+\]|\[chore\]) (feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9_-]+\))?!?: [a-z].+$'
           if [[ ! "$TITLE" =~ $re ]]; then
-            echo "::error::PR title '$TITLE' must match: [TASK-{number}] <type>(<scope>)?: <lowercase subject>"
+            echo "::error::PR title '$TITLE' must match: ([TASK-{number}] | [chore]) <type>(<scope>)?: <lowercase subject>"
             echo ""
             echo "Examples that pass:"
             echo "  [TASK-43] feat(providers): add tts provider scaffold"
             echo "  [TASK-7] fix(run): reset cyclonedds interface autodetermine"
             echo "  [TASK-99] chore(ci): tighten branch regex"
+            echo "  [chore] docs(readme): fix typo in install section"
+            echo "  [chore] chore(deps): bump cyclonedds to 0.10.3"
             echo ""
             echo "Examples that fail:"
             echo "  feat(providers): add tts provider     (missing [TASK-{n}] prefix)"

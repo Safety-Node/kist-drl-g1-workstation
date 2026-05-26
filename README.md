@@ -127,10 +127,12 @@ Code-level architectural decisions (CONV-001..011) live in [`docs/CONVENTIONS.md
 
 ## Contributing
 
-PRs are squash-merged to `main`. Conventions enforced in CI (TBD):
+PRs are squash-merged to `main`. Conventions enforced in CI:
 
-- Branch name: `TASK-{number}` (no description suffix)
-- PR title: `[TASK-{number}] <type>(<scope>)?: <subject>` (Conventional Commits, lowercase casing)
+- Branch name: `TASK-{number}` (Notion-linked work) or `chore/{description}` (non-task housekeeping — e.g. `chore/fix-typo-in-readme`, `chore/bump-cyclonedds-dep`)
+- PR title: `[TASK-{number}] <type>(<scope>)?: <subject>` or `[chore] <type>(<scope>)?: <subject>` (Conventional Commits, lowercase casing)
+
+`chore/...` branches are for housekeeping that doesn't warrant a Notion Task (typo fixes, dep bumps, comment cleanup). Notion tracking is by-pass for these.
 
 ---
 
