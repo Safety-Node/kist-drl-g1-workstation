@@ -66,5 +66,13 @@
       tick_rate_hz: 10.0,
       cancel_keywords: ["취소", "그만", "멈춰"],
     },
+    // CONV-012 2026-05-26: locomotion split out of VLA into a PC-side
+    // NavigationProvider. Emits Twist on /bridge/cmd/vel → NX
+    // motor_controller LocoClient.Move(vx, vy, vyaw). control_rate_hz
+    // TBD — 5/26 회의에서는 10-50 Hz 추정.
+    navigation_provider: {
+      control_rate_hz: 10.0,
+      uwb_topic_in: "/uwb/raw",
+    },
   },
 }

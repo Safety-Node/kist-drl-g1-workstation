@@ -48,6 +48,7 @@ from backgrounds.base import Background
 from backgrounds.plugins.gui_background import GUIBackground, GUIBackgroundConfig
 from backgrounds.plugins.task_srv_bg import TaskSrvBg, TaskSrvBgConfig
 from inputs.plugins.sound_sensor import SoundSensor, SoundSensorConfig
+from providers.navigation_provider import NavigationProvider, NavigationProviderConfig
 from providers.stt_provider import STTConfig, STTProvider
 from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider
 from providers.tts_provider import TTSConfig, TTSProvider
@@ -100,14 +101,17 @@ def _build_runtime() -> _Runtime:
     rt = _Runtime()
 
     # Base providers. All Provider→Provider deps are @singletons (CONV-010),
-    # so STT/TTS/VLA fetch UnitreeG1 inside their own __init__. The only
-    # requirement is that UnitreeG1 is constructed FIRST so that fetch
-    # returns the run.py-built instance instead of creating a default one.
+    # so STT/TTS/VLA/Navigation fetch UnitreeG1 inside their own __init__.
+    # The only requirement is that UnitreeG1 is constructed FIRST so that
+    # fetch returns the run.py-built instance instead of creating a default
+    # one.
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
     tts = TTSProvider(TTSConfig())  # CONV-010: __init__ fetches unitree_g1 (TBD)
     vla = VLAProvider(VLAConfig())
-    rt.providers = [unitree_g1, stt, tts, vla]
+    # CONV-012 2026-05-26: locomotion split out of VLA into PC NavigationProvider.
+    navigation = NavigationProvider(NavigationProviderConfig())
+    rt.providers = [unitree_g1, stt, tts, vla, navigation]
 
     # Connectors. They are stateless adapters with no lifecycle of their
     # own; their __init__ fetches the relevant Provider singletons that

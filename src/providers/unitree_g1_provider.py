@@ -22,6 +22,7 @@ Publishes (Reliable):
   /bridge/cmd/arm        g1_onboard_msgs/JointCmdChunk  rt/arm_sdk, IF-6 (CONV-006 REVISED)
   /bridge/cmd/low        g1_onboard_msgs/JointCmdChunk  rt/lowcmd, NEW 2026-05-22 (CONV-006 REVISED)
   /bridge/cmd/loco       g1_onboard_msgs/LocoCommand    StandUp/Damp/SitDown
+  /bridge/cmd/vel        geometry_msgs/Twist            NavigationProvider walking velocity (CONV-012)
   /bridge/cmd/audio_out  g1_onboard_msgs/AudioPCM       TTS playback
 
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
@@ -380,6 +381,19 @@ class UnitreeG1Provider:
         # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
         # TODO(REQ-33) [TASK-41]: serialize + publish
         raise NotImplementedError("UnitreeG1Provider.publish_loco_cmd: TBD [TASK-41]")
+
+    def publish_twist(self, vx: float, vy: float, vyaw: float) -> None:
+        """Publish geometry_msgs/Twist on /bridge/cmd/vel for NX motor_controller's
+        LocoClient.Move(vx, vy, vyaw) dispatch.
+
+        Called by NavigationProvider at NavigationProviderConfig.control_rate_hz.
+        Continuous walking velocity. Discrete LocoClient preset transitions
+        (StandUp / SitDown / BalanceStand / ZeroTorque) go through a separate
+        path (send_loco_command / LocoCommand TypedDict).
+
+        TODO(REQ "Twist Cmd Wire") [TASK-41]: implement DDS publisher.
+        """
+        raise NotImplementedError("UnitreeG1Provider.publish_twist — scaffold")
 
     def publish_audio_out(self, pcm: bytes) -> None:
         """

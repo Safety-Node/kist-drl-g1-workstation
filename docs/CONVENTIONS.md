@@ -141,9 +141,9 @@ when LLM returns.
 
 ---
 
-## CONV-005 — Whole-body VLA (locomotion + manipulation in one inference)
+## CONV-005 — Arm + hand manipulation VLA (locomotion split out 2026-05-26)
 
-**Status**: Accepted · **Date**: 2026-05-22 (KIST mail)
+**Status**: Accepted · **Date**: 2026-05-22 (KIST mail), 범위 축소 2026-05-26 (CONV-012)
 
 ### Context
 Original split: navigation = high-level `LocoClient.Move` (NX),
@@ -152,16 +152,23 @@ transitions caused visible BalanceStand discontinuities and minimum
 100 Hz control was required.
 
 ### Decision
-Locomotion + manipulation are both driven by the **whole-body VLA**. NX
-`navigation` package retired. Joint cmds split across two SDK paths:
+Locomotion 은 5/26 회의로 PC NavigationProvider 분리. CONV-005 범위가
+arm/hand 로 축소됨. (chunk-as-wire CONV-006 REVISED 는 arm/hand 경로에만
+적용.) Joint cmds split across two SDK paths:
 - `/bridge/cmd/arm` (rt/arm_sdk, upper body, weight respected)
-- `/bridge/cmd/low` (rt/lowcmd, lower body, weight ignored)
+- `/bridge/cmd/low` (rt/lowcmd, lower body, weight ignored) — kept in
+  the chunk wire schema but post-CONV-012 the VLA only drives
+  arm/hand joints; lower body is reserved for future revisit if
+  whole-body VLA returns. See CONV-012 for the navigation path.
 
 ### Consequences
 - ✅ Continuous whole-body motion, no rock-standing discontinuity.
 - ⚠️ VLA Provider includes a `GearSonic` balance-correction stage post-VLA
   (placement TBD — see CONV-007).
 - ⚠️ Onboard `navigation` package deleted (separate decision in onboard repo).
+- ⚠️ 2026-05-26 (CONV-012): VLA-locomotion 아키텍처 / GearSonic 배치 모두
+  미확정으로 시연 일정 충족 불가. 보행은 PC NavigationProvider 가
+  Unitree SDK `loco_client.Move(vx, vy, vyaw)` 로 처리.
 
 ---
 
@@ -425,6 +432,51 @@ in case the LLM Cortex / mode system is revived later.
 - ✅ GUI dependency surface is explicit at construction.
 - ⚠️ Adding a new GUI element means importing one more Provider in
   ``GUIBackground``. Acceptable for the demo's component count.
+
+---
+
+## CONV-012 — Navigation: PC NavigationProvider with Unitree SDK loco_client (vx/vy/vyaw)
+
+**Status**: Accepted · **Date**: 2026-05-26
+
+### Context
+5/22 결정 "보행도 low-level VLA" 가 VLA 아키텍처 / GearSonic mode 모두
+미확정으로 시연 일정 충족 불가. Locomotion 을 다시 분리해 시연 일정을
+지키고, VLA 는 arm/hand manipulation 으로 범위를 좁힌다.
+
+### Decision
+PC NavigationProvider 가 sub-task 받아 Unitree SDK `loco_client.Move(vx, vy,
+vyaw)` 발행. Kalman Filter 내부 구현. CONV-005 범위 축소.
+
+- PC `NavigationProvider` (`src/providers/navigation_provider.py`) —
+  internal Kalman filter (UWB ↔ IMU base/ankle), planner, control loop
+  at ``control_rate_hz`` (default 10 Hz; 10-50 Hz 추정).
+- PC `UnitreeG1Provider.publish_twist(vx, vy, vyaw)` →
+  `geometry_msgs/Twist` on `/bridge/cmd/vel` (Reliable).
+- NX `comm_bridge` relays `/bridge/cmd/vel` → `/onboard/cmd/vel`.
+- NX `motor_controller` consumes `/onboard/cmd/vel` and dispatches via
+  `LocoClient.Move(vx, vy, vyaw)` at 100 Hz (REQ-34).
+- Discrete LocoClient presets (StandUp / SitDown / Damp / BalanceStand)
+  remain on the separate `/bridge/cmd/loco` channel; not on the Twist
+  path. MoveConnector dispatches 3-ways: discrete loco → nav → VLA
+  (arm/hand only).
+
+### Consequences
+- ✅ 시연 일정 충족 가능.
+- ⚠️ NX velocity 처리 경로 부분 복원 (별 commit `2a2d740`) — `cmd_vel`
+  path / `velocity_buf` / `LocoClient.Move` 가 motor_controller 에 다시
+  살아남.
+- ⚠️ VLA-locomotion 후속 결정시 revisit (CONV-005 + CONV-012 둘 다 수정해야 함).
+
+### Affected
+- workstation `src/providers/navigation_provider.py` (NEW)
+- workstation `src/providers/unitree_g1_provider.py` (`publish_twist` added)
+- workstation `src/actions/move/connector/move_connector.py` (3-way routing)
+- workstation `src/run.py` (NavigationProvider in build/start)
+- workstation `config/sous_chef_g1.json5` (`navigation_provider` block)
+- onboard `src/motor_controller/` (velocity_buf restored)
+- onboard `src/safety_monitor/` (cmd_vel watchdog active 다시)
+- onboard `src/comm_bridge/config/comm_bridge_params.yaml` (cmd_vel path 부활)
 
 ---
 
