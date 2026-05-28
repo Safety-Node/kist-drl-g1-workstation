@@ -27,11 +27,7 @@ Publishes (Reliable):
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
 (navigation pkg removed 2026-05-22).
 
-TODO(REQ-32) [TASK-41]: rclpy init + subscribe with QoS above. DDS callbacks
-                        REPLACE the TopicCache attribute with a fresh instance
-                        (frozen dataclass → atomic ref swap; never mutate in
-                        place).
-TODO(REQ-33) [TASK-41]: publish methods + comm_bridge_alive() watchdog.
+TODO(REQ-33) [TASK-41]: publish methods.
                         Watchdog fail must LOG + DROP, never raise — callers
                         (VLA, TTS) are fire-and-forget via _schedule_coro and
                         cannot retrieve exceptions.
@@ -42,9 +38,16 @@ TODO(REQ-32) [TASK-41]: register_estop_callback push API for ≤200 ms E-STOP
 """
 
 import logging
+import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional, TypedDict
+
+import rclpy
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Imu
 
 from .singleton import singleton
 
@@ -139,6 +142,7 @@ class UnitreeG1Provider:
         heartbeat_timeout_ms: int = 500,
         sensor_ttl_ms: int = 200,
         state_ttl_ms: int = 1000,
+        executor_threads: int = 4,
     ):
         """
         Parameters
@@ -159,6 +163,11 @@ class UnitreeG1Provider:
             Sensor stream stale threshold (BestEffort topics).
         state_ttl_ms : int
             State stream stale threshold (Reliable topics like estop/buf_state).
+        executor_threads : int
+            Number of threads in the MultiThreadedExecutor. Each subscription
+            gets its own MutuallyExclusiveCallbackGroup by default, so threads
+            allow concurrent callback execution across topics — important for
+            estop latency not being blocked by slow sensor callbacks (e.g. audio_pcm).
         """
         self._ros_domain_id = ros_domain_id
         self._cyclonedds_uri = cyclonedds_uri
@@ -166,8 +175,15 @@ class UnitreeG1Provider:
         self._heartbeat_timeout_ms = heartbeat_timeout_ms
         self._sensor_ttl_ms = sensor_ttl_ms
         self._state_ttl_ms = state_ttl_ms
+        self._executor_threads = executor_threads
 
         self._connected = False
+
+        # rclpy lifecycle handles
+        self._lock = threading.Lock()
+        self._node: Optional[rclpy.node.Node] = None
+        self._executor: Optional[MultiThreadedExecutor] = None
+        self._spin_thread: Optional[threading.Thread] = None
 
         # Sensor topic caches (BestEffort)
         self._color: TopicCache = TopicCache()
@@ -195,16 +211,91 @@ class UnitreeG1Provider:
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Initialize rclpy/CycloneDDS participant + spin subscribers/publishers."""
-        # TODO(REQ-32) [TASK-41]: rclpy.init + CYCLONEDDS_URI export
-        # TODO(REQ-32) [TASK-41]: bind subscribers with correct QoS
-        # TODO(REQ-33) [TASK-41]: bind publishers
-        # TODO(REQ-32) [TASK-41]: spin executor in a worker thread
-        raise NotImplementedError("UnitreeG1Provider.start: TBD [TASK-41]")
+        with self._lock:
+            if self._connected:
+                return
+
+            # CYCLONEDDS_URI: constructor arg > env var already set.
+            uri = self._cyclonedds_uri or os.environ.get("CYCLONEDDS_URI")
+            if uri:
+                os.environ["CYCLONEDDS_URI"] = uri
+                logging.info("UnitreeG1Provider: CYCLONEDDS_URI=%s", uri)
+            else:
+                logging.warning(
+                    "UnitreeG1Provider: CYCLONEDDS_URI not set — "
+                    "source env.sh or pass cyclonedds_uri= to constructor"
+                )
+
+            os.environ["ROS_DOMAIN_ID"] = str(self._ros_domain_id)
+
+            if not rclpy.ok():
+                rclpy.init()
+
+            self._node = rclpy.create_node("unitree_g1_provider")
+            self._executor = MultiThreadedExecutor(num_threads=self._executor_threads)
+            self._executor.add_node(self._node)
+
+            self._spin_thread = threading.Thread(
+                target=self._executor.spin,
+                name="unitree_g1_spin",
+                daemon=True,
+            )
+            self._spin_thread.start()
+            self._connected = True
+
+            _qos_be = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            )
+            self._node.create_subscription(
+                Imu,
+                "/bridge/sensors/imu",
+                self._on_imu_base,
+                _qos_be,
+            )
+            logging.info("UnitreeG1Provider: subscribed /bridge/sensors/imu")
+
+            # TODO(REQ-32) [TASK-41]: bind remaining subscribers with correct QoS
+            # TODO(REQ-33) [TASK-41]: bind publishers
+            logging.info(
+                "UnitreeG1Provider started (domain=%d, node=%s)",
+                self._ros_domain_id,
+                self._node.get_name(),
+            )
 
     def stop(self) -> None:
         """Tear down DDS participant cleanly."""
-        # TODO(REQ-32) [TASK-41]: cancel pubs/subs, shutdown rclpy
-        raise NotImplementedError("UnitreeG1Provider.stop: TBD [TASK-41]")
+        with self._lock:
+            if not self._connected:
+                return
+            self._connected = False
+
+        if self._executor is not None:
+            self._executor.shutdown(timeout_sec=2.0)
+            self._executor = None
+
+        if self._spin_thread is not None:
+            self._spin_thread.join(timeout=3.0)
+            if self._spin_thread.is_alive():
+                logging.warning("UnitreeG1Provider: spin thread did not stop within 3s")
+            self._spin_thread = None
+
+        if self._node is not None:
+            self._node.destroy_node()
+            self._node = None
+
+        if rclpy.ok():
+            rclpy.shutdown()
+
+        logging.info("UnitreeG1Provider stopped")
+
+    # ------------------------------------------------------------------
+    # DDS subscription callbacks (called from MultiThreadedExecutor threads)
+    # ------------------------------------------------------------------
+    def _on_imu_base(self, msg: Imu) -> None:
+        """Callback for /bridge/sensors/imu (base IMU, BestEffort)."""
+        self._imu_base = TopicCache(value=msg, last_seen_ts=time.monotonic())
 
     # ------------------------------------------------------------------
     # Sensor data properties (BestEffort, sensor_ttl_ms)
@@ -330,10 +421,13 @@ class UnitreeG1Provider:
         signal. Reliable topics (estop, buf_state, speaker_state) require
         the bridge to be actively forwarding to advance ``last_seen_ts``.
         """
-        # TODO(REQ-33) [TASK-41]: aggregate latest timestamps across the
-        #                          Reliable caches only (estop, buf_state,
-        #                          speaker_state).
-        raise NotImplementedError("UnitreeG1Provider.comm_bridge_alive: TBD [TASK-41]")
+        # TODO(REQ-33) [TASK-41]: replace with Reliable caches (estop,
+        #   buf_state, speaker_state) once those subscriptions are added.
+        #   For now, IMU (BestEffort) is used as a proxy — acceptable while
+        #   Reliable subscriptions are not yet wired.
+        ttl_s = self._heartbeat_timeout_ms / 1000.0
+        now = time.monotonic()
+        return not self._imu_base.stale(now=now, ttl_s=ttl_s)
 
     # ------------------------------------------------------------------
     # Publishers (cmd outbound, Reliable)

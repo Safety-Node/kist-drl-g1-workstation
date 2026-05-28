@@ -10,7 +10,7 @@
                   <NetworkInterface name="ethX"/></Interfaces></General></Domain></CycloneDDS>'
           (overrides the file URI per CycloneDDS docs).
         -->
-        <NetworkInterface autodetermine="true" priority="default" multicast="default" />
+        <NetworkInterface name="eno2" priority="default" multicast="default" />
       </Interfaces>
     </General>
     <Discovery>
