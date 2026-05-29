@@ -2,18 +2,21 @@
   <Domain>
     <General>
       <Interfaces>
-        <!--
-          autodetermine: CycloneDDS picks the first non-loopback IPv4 interface
-          with multicast support. Avoids hard-coding macOS ("en0") vs Linux
-          ("eno1" / "enp3s0") naming; demo boxes can override via env:
-              CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces>
-                  <NetworkInterface name="ethX"/></Interfaces></General></Domain></CycloneDDS>'
-          (overrides the file URI per CycloneDDS docs).
-        -->
-        <NetworkInterface autodetermine="true" priority="default" multicast="default" />
+        <NetworkInterface name="eno2" priority="default" multicast="false"/>
       </Interfaces>
+      <!--
+        Unicast-only peer discovery: explicitly list the NX as a peer.
+        Matches the NX-side config (AllowMulticast=false + Peer address).
+        DDS_PEER_IP defaults to NX IP; override via env var if needed.
+      -->
+      <AllowMulticast>false</AllowMulticast>
     </General>
     <Discovery>
+      <Peers>
+        <Peer address="${DDS_PEER_IP}"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
       <EnableTopicDiscoveryEndpoints>true</EnableTopicDiscoveryEndpoints>
     </Discovery>
   </Domain>
