@@ -21,7 +21,7 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 | 2 | TTS Provider | `src/providers/tts_provider.py` | Naver Clova default (TASK-43 scaffold). Vendor reference: `src/providers/example/naver_clova_tts_provider.py` |
 | 3 | UnitreeG1 Provider | `src/providers/unitree_g1_provider.py` | DDS facade — rclpy + CycloneDDS direct (TASK-41 scaffold) |
 | 4 | VLA Provider | `src/providers/vla_provider.py` | GR00T N1.7 + GearSonic placeholder (TASK-40 scaffold). Vendor reference: `src/providers/example/vla_groot_provider.py` |
-| 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` | Scenario-driven sub-task orchestrator (replaces LLM Cortex) |
+| 5 | TaskSrvProvider + TaskSrvBg | `src/providers/task_srv_provider.py` + `src/backgrounds/plugins/task_srv_bg.py` | Hook-based scenario state machine — JSON5 scenarios in `config/scenarios/`, replaces LLM Cortex |
 | 6 | Move Connector | `src/actions/move/connector/move_connector.py` | Routes sub-task prompts to VLA / LocoCommand |
 | 7 | Speak Connector | `src/actions/speak/connector/speak_connector.py` | Text → TTS Provider |
 | 8 | Sound Sensor | `src/inputs/plugins/sound_sensor.py` | STT transcript → TaskSrvProvider |
@@ -82,11 +82,15 @@ uv run python scripts/exercise_task_srv.py
 
 # 3. Live scaffold runtime — TaskSrvProvider + backgrounds run; un-implemented
 #    Provider .start() calls are logged + skipped. Ctrl+C exits cleanly.
-uv run python src/run.py --scaffold-loop
+uv run python src/run.py move_test --scaffold-loop
 
 # (Future) Full run, once backends land
-uv run python src/run.py
+uv run python src/run.py move_test
 ```
+
+Scenario: `src/run.py [scenario]` loads exactly one JSON5 file from `config/scenarios/`
+(e.g. `move_test` → `move_test.json5`); omit the arg for the default. Add a scenario by
+dropping a `.json5` file there — see `move_test.json5` for the hook/criteria schema.
 
 PC↔NX transport: rclpy + CycloneDDS direct (CONV-002 — no Zenoh bridge daemon).
 PC and NX must share the same DDS domain + `cyclonedds.xml` network interface.
