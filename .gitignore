@@ -52,6 +52,11 @@ logs/
 /zenohdb
 /locations
 
+# ROS2 workspace build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
 # Mode system state files
 config/memory
 config/.runtime.json5

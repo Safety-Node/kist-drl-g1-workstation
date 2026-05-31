@@ -47,9 +47,8 @@ sudo apt-get update && sudo apt-get install -y \
     ros-humble-rmw-cyclonedds-cpp
 
 # ROS 2 — https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
-source /opt/ros/humble/setup.bash
-export CYCLONEDDS_URI=file://$(pwd)/cyclonedds/cyclonedds.xml
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+# Repo-local activation (recommended)
+source env.sh
 
 # Python deps (CycloneDDS Python bindings build against the C lib above)
 uv sync --extra dds
