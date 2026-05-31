@@ -497,9 +497,14 @@ A sub-task becomes a small lifecycle machine with four hook lists —
 `on_create` / `on_start` / `on_success` / `on_fail` — each an ordered list of
 Actions (`Speak` / `Move` / `SetContext` / `Wait` / `Custom`). A connector
 call is just an Action, so it is included or omitted per hook (empty list =
-no call). Hook lists run as sequential-await coroutines on the TaskSrvBg
-event loop (`[Speak, Move]` speaks then moves; `await_done: false` opts an
-action into fire-and-forget). Success is a polymorphic `Criterion` that reads
+no call). Connector dispatch is **fire-and-forget** (OM1-style): `Speak`/`Move`
+fire their `connect()` and the hook runner does NOT await completion;
+`Wait`/`SetContext`/`Custom` are awaited inline because their effect must be
+sequenced. Pacing is **per-action**: each action node in the scenario json5
+may carry a `delay` (seconds) — an independent pre-delay applied to THAT
+action's connect, measured from the hook's entry, so connect actions fire as
+independent timer tasks and one action's delay does NOT push the others.
+Success is a polymorphic `Criterion` that reads
 sensors AND voice transcripts: `voice_choice` writes the chosen value to a
 per-activation blackboard; later sub-tasks reference it via `{dest.target}`
 templates resolved at runtime (replacing lambdas, which data files can't hold).
@@ -533,8 +538,11 @@ and one-provider-one-file matches the rest of the codebase.
 - ✅ No new dependency — reuses the existing `json5` already in pyproject.
 - ✅ Single-file provider (loop owned by provider); `TaskSrvBg` is a thin
   thread host. No shim / no package indirection.
-- ⚠️ Connector-call delays (`{speak,move}_{pre,post}_delay_s` on TaskSrvConfig)
-  added as a TTS-pacing workaround; applied by ConnectorHub, default 0.
+- ⚠️ Connector dispatch is fire-and-forget; pacing is a **per-action `delay`**
+  (seconds) set on each action node in the scenario json5 — an independent
+  pre-delay on that connect (does not cascade to other actions). Default 0.
+  The `await_done` opt-in and the global `{speak,move}_{pre,post}_delay_s`
+  config fields were removed.
 
 ### Affected
 - workstation `src/providers/task_srv_provider.py` (the whole subsystem in one

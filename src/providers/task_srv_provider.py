@@ -125,9 +125,16 @@ class TickContext:
 
 
 class Action(ABC):
-    """One declarative step in a hook list. ``await_done`` False → fire-and-forget."""
+    """One declarative step in a hook list.
 
-    await_done: bool = True
+    ``dispatch_async`` True (Speak/Move) → the connect is fired and NOT awaited
+    by the hook runner (OM1-style fire-and-forget); pacing comes from the
+    dispatcher gaps in TaskSrvConfig. False (Wait/SetContext/Custom) → awaited
+    inline because the effect must be sequenced (pause / blackboard write).
+    """
+
+    dispatch_async: bool = False
+    delay: float = 0.0          # per-action pre-delay (s); concrete actions set it from json5
 
     @abstractmethod
     async def run(self, ctx: ScenarioContext, hub: "ConnectorHub") -> None: ...
@@ -304,38 +311,24 @@ class ConnectorHub:
         move_connector: T.Optional[T.Any] = None,
         speak_connector: T.Optional[T.Any] = None,
         enable_speak: bool = True,
-        speak_pre_delay_s: float = 0.0,
-        speak_post_delay_s: float = 0.0,
-        move_pre_delay_s: float = 0.0,
-        move_post_delay_s: float = 0.0,
     ) -> None:
         self._move = move_connector
         self._speak = speak_connector
         self._enable_speak = enable_speak
-        self._speak_pre, self._speak_post = speak_pre_delay_s, speak_post_delay_s
-        self._move_pre, self._move_post = move_pre_delay_s, move_post_delay_s
 
     async def move(self, prompt: str) -> None:
-        if self._move_pre > 0:
-            await asyncio.sleep(self._move_pre)
         if self._move is None:
             logging.info("TaskSrv: [MOVE] %s", prompt)
-        else:
-            await self._move.connect(MoveInput(action=prompt))
-        if self._move_post > 0:
-            await asyncio.sleep(self._move_post)
+            return
+        await self._move.connect(MoveInput(action=prompt))
 
     async def speak(self, text: str) -> None:
         if not self._enable_speak:
             return
-        if self._speak_pre > 0:
-            await asyncio.sleep(self._speak_pre)
         if self._speak is None:
             logging.info("TaskSrv: [SPEAK] %s", text)
-        else:
-            await self._speak.connect(SpeakInput(action=text))
-        if self._speak_post > 0:
-            await asyncio.sleep(self._speak_post)
+            return
+        await self._speak.connect(SpeakInput(action=text))
 
 
 # YAGNI escape hatch: {custom: "name"} → a coroutine registered by Python code.
@@ -344,10 +337,12 @@ CUSTOM_ACTIONS: T.Dict[str, T.Callable[["ScenarioContext", ConnectorHub], T.Awai
 
 @dataclass
 class Speak(Action):
-    """Speak ``text`` (template-resolved)."""
+    """Speak ``text`` (template-resolved). Fire-and-forget connect dispatch."""
+
+    dispatch_async = True   # class var (not a dataclass field)
 
     text: str
-    await_done: bool = True
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.speak(resolve_str(self.text, ctx))
@@ -355,10 +350,12 @@ class Speak(Action):
 
 @dataclass
 class Move(Action):
-    """Dispatch ``prompt`` (template-resolved) to the Move connector."""
+    """Dispatch ``prompt`` (template-resolved) to the Move connector. Fire-and-forget."""
+
+    dispatch_async = True   # class var (not a dataclass field)
 
     prompt: str
-    await_done: bool = True
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.move(resolve_str(self.prompt, ctx))
@@ -366,11 +363,11 @@ class Move(Action):
 
 @dataclass
 class SetContext(Action):
-    """Write ``value`` (resolved) to ``blackboard[key]``."""
+    """Write ``value`` (resolved) to ``blackboard[key]``. Awaited inline."""
 
     key: str
     value: T.Any
-    await_done: bool = True
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         ctx[self.key] = resolve_value(self.value, ctx)
@@ -378,10 +375,10 @@ class SetContext(Action):
 
 @dataclass
 class Wait(Action):
-    """Pause ``seconds`` (only meaningful when awaited)."""
+    """Pause ``seconds`` — awaited inline so it actually delays the sequence."""
 
     seconds: float
-    await_done: bool = True
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await asyncio.sleep(self.seconds)
@@ -389,10 +386,10 @@ class Wait(Action):
 
 @dataclass
 class Custom(Action):
-    """Run a Python-registered coroutine (``CUSTOM_ACTIONS[name]``)."""
+    """Run a Python-registered coroutine (``CUSTOM_ACTIONS[name]``). Awaited inline."""
 
     name: str
-    await_done: bool = True
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         fn = CUSTOM_ACTIONS.get(self.name)
@@ -458,12 +455,7 @@ class TaskSrvConfig:
     # Drop transcripts queued before a pause/resume gap longer than this.
     # Assumes ts is time.monotonic() seconds (matches TranscriptEvent.ts). 0 disables.
     stale_audio_s: float = 5.0
-    # Connector-call delays (ConnectorHub). TTS-pacing workaround: a post-speak
-    # delay holds the hook sequence until audio has played. Default 0.
-    speak_pre_delay_s: float = 0.0
-    speak_post_delay_s: float = 0.0
-    move_pre_delay_s: float = 0.0
-    move_post_delay_s: float = 0.0
+    # Connect pacing is per-action (Action.delay in the scenario json5), not here.
     # Loop pump (owned by TaskSrvProvider.run).
     heartbeat_every_ticks: int = 50          # INFO heartbeat cadence; CONV-009. 0 disables.
     swallow_tick_exceptions: bool = True     # log+continue vs stop the loop
@@ -491,19 +483,19 @@ def _req_str(value: T.Any, field_name: str) -> str:
     return value
 
 
-_ACTION_KEYS: T.Dict[str, T.Callable[[T.Any, bool], Action]] = {
-    "speak": lambda v, aw: Speak(text=_req_str(v, "speak"), await_done=aw),
-    "move": lambda v, aw: Move(prompt=_req_str(v, "move"), await_done=aw),
-    "wait": lambda v, aw: Wait(seconds=float(v), await_done=aw),
-    "custom": lambda v, aw: Custom(name=_req_str(v, "custom"), await_done=aw),
-    "set_context": lambda v, aw: _build_set_context(v, aw),
+_ACTION_KEYS: T.Dict[str, T.Callable[[T.Any, float], Action]] = {
+    "speak": lambda v, d: Speak(text=_req_str(v, "speak"), delay=d),
+    "move": lambda v, d: Move(prompt=_req_str(v, "move"), delay=d),
+    "wait": lambda v, d: Wait(seconds=float(v), delay=d),
+    "custom": lambda v, d: Custom(name=_req_str(v, "custom"), delay=d),
+    "set_context": lambda v, d: _build_set_context(v, d),
 }
 
 
-def _build_set_context(v: T.Any, aw: bool) -> Action:
+def _build_set_context(v: T.Any, delay: float) -> Action:
     if not isinstance(v, dict) or "key" not in v or "value" not in v:
         raise ScenarioConfigError("set_context must be a mapping with 'key' and 'value'")
-    return SetContext(key=_req_str(v["key"], "set_context.key"), value=v["value"], await_done=aw)
+    return SetContext(key=_req_str(v["key"], "set_context.key"), value=v["value"], delay=delay)
 
 
 _CRITERION_BUILDERS: T.Dict[str, T.Callable[[T.Mapping], Criterion]] = {
@@ -558,7 +550,8 @@ def build_action(node: T.Any) -> Action:
     present = [k for k in node if k in _ACTION_KEYS]
     if len(present) != 1:
         raise ScenarioConfigError(f"action node needs exactly one of {sorted(_ACTION_KEYS)}; got {sorted(node)}")
-    return _ACTION_KEYS[present[0]](node[present[0]], bool(node.get("await_done", True)))
+    delay = float(node.get("delay", 0.0))
+    return _ACTION_KEYS[present[0]](node[present[0]], delay)
 
 
 def build_criterion(node: T.Any) -> Criterion:
@@ -678,10 +671,6 @@ class TaskSrvProvider:
         self._hub = ConnectorHub(
             self._move_connector, self._speak_connector,
             enable_speak=self._config.enable_speak_feedback,
-            speak_pre_delay_s=self._config.speak_pre_delay_s,
-            speak_post_delay_s=self._config.speak_post_delay_s,
-            move_pre_delay_s=self._config.move_pre_delay_s,
-            move_post_delay_s=self._config.move_post_delay_s,
         )
         if scenarios is None:
             from config.scenarios import load as _load
@@ -926,24 +915,28 @@ class TaskSrvProvider:
 
     # -- hook execution ----------------------------------------------------
     async def _run_actions(self, actions: T.List[Action]) -> None:
-        """Run a hook list: awaited actions run in order; await_done=False ones
-        are scheduled fire-and-forget so they overlap the next action."""
+        """Run a hook list. Speak/Move dispatch fire-and-forget as independent
+        timers (each waits its own ``delay``, no cascade); Wait/SetContext/Custom
+        run inline after their ``delay``."""
         for action in actions:
-            try:
-                if getattr(action, "await_done", True):
-                    await action.run(self._blackboard, self._hub)
-                elif self._loop is not None:
-                    self._loop.create_task(self._safe_run(action))
-                else:
-                    await self._safe_run(action)
-            except Exception:
-                logging.exception("TaskSrvProvider: action %r raised; continuing", action)
+            if action.dispatch_async and self._loop is not None:
+                self._loop.create_task(self._delayed_dispatch(action))   # independent timer
+            else:
+                if action.delay > 0:
+                    await asyncio.sleep(action.delay)
+                await self._safe_run(action)                             # inline control
+
+    async def _delayed_dispatch(self, action: Action) -> None:
+        """Wait this action's own pre-delay, then fire its connect (fire-and-forget)."""
+        if action.delay > 0:
+            await asyncio.sleep(action.delay)
+        await self._safe_run(action)
 
     async def _safe_run(self, action: Action) -> None:
         try:
             await action.run(self._blackboard, self._hub)
         except Exception:
-            logging.exception("TaskSrvProvider: fire-and-forget action %r raised", action)
+            logging.exception("TaskSrvProvider: action %r raised", action)
 
     def _schedule(self, coro: T.Awaitable) -> None:
         """Schedule a lifecycle coroutine on the loop (or run inline if no loop — sync tests)."""
