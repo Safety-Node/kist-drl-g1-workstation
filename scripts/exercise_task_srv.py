@@ -1,30 +1,25 @@
 """
-Exercise TaskSrvProvider standalone — no UnitreeG1 / STT / VLA backends.
+Exercise TaskSrvProvider standalone — no STT / VLA / DDS backends.
 
-Wires TaskSrvProvider + TaskSrvBg with stubbed dependencies and injects a
-real demo trigger ("냉장고에서 오이 가져와") so the full state machine —
-trigger match → activate → dispatch → cancel → IDLE — runs end-to-end and
-shows up in the logs.
+Drives the redesigned hook + voice-gated engine (REQ-44, 2026-05-30) through
+the LINEAR, consume-once ``move_test`` scenario end-to-end with FakeConnectors
+and injected fake UWB poses. Each leg = two sub-tasks: ① wait for a voice
+command (voice_keyword) → ② Move + UWB arrival (uwb_pose). No loop, so a
+consumed command keyword does NOT re-fire — this script demonstrates that by
+re-issuing "냉장고로 가" after the fridge leg and showing it is ignored.
 
 Run from repo root:
     uv run python scripts/exercise_task_srv.py
 
-What you should see in the output (in order):
-  - TaskSrvProvider loads scenarios from config.scenarios.ALL
-  - TaskSrvBg tick loop entering (period=0.100s)
-  - Trigger '냉장고에서 오이' matched scenario 'refrigerator_pickup'
-  - [MOVE] connect(action='Walk to the refrigerator and face the door.')
-  - ... (criterion never True; FakeG1 has no pose data)
-  - Cancel keyword '취소' matched → aborting active scenario
-  - [SPEAK] connect(action='취소했습니다.')
-  - state back to IDLE
+Expected log order:
+  - loads scenarios from config/scenarios/*.yaml ; tick loop entering
+  - trigger '이동 테스트 시작' → on_scenario_start [SPEAK] 이동 테스트를 시작합니다...
+  - command '냉장고로 가' → go_fridge: [SPEAK] 냉장고로 갑니다. + [MOVE] Walk to the refrigerator...
+  - (fake fridge pose) → [SPEAK] 냉장고에 도착했습니다.   (now current = await_table_cmd)
+  - RE-ISSUE '냉장고로 가' → IGNORED (await_table_cmd only listens for 식탁); state stays active
+  - command '식탁으로 가' → go_table: [SPEAK] 식탁으로 갑니다. + [MOVE] Walk to the table.
+  - (fake table pose) → [SPEAK] 식탁에 도착했습니다. → on_scenario_end → state IDLE
   - Clean shutdown on stop event
-
-Why this exists: most Providers are still NotImplementedError, so running
-``src/run.py`` aborts at the first .start() (or skips them via
---scaffold-loop but then nothing triggers TaskSrvProvider since SoundSensor
-also doesn't start). This script bypasses that scaffolding gap and
-exercises TaskSrvProvider directly via stubs.
 """
 
 import logging
@@ -36,23 +31,16 @@ from pathlib import Path
 from typing import Any
 
 
-# Make `providers.*` / `backgrounds.*` (under src/) AND `config.scenarios`
-# (project root) importable from the scripts/ subdirectory.
+# Make `providers.*` / `backgrounds.*` (src/) AND `config.scenarios` (root)
+# importable from scripts/.
 _ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_ROOT))             # for `config.scenarios`
-sys.path.insert(0, str(_ROOT / "src"))     # for `providers.*` / `backgrounds.*`
+sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_ROOT / "src"))
 
 
 from backgrounds.plugins.task_srv_bg import TaskSrvBg, TaskSrvBgConfig  # noqa: E402
 from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# Stubs — replace the non-singleton Connectors. The Provider singletons
-# (UnitreeG1Provider) are real instances; their default TopicCache fields
-# (value=None, last_seen_ts=0.0) already behave as "never received" so
-# TaskSrvProvider's tick() sees the same thing a FakeG1 would produce.
-# ---------------------------------------------------------------------------
+from providers.unitree_g1_provider import TopicCache, UnitreeG1Provider  # noqa: E402
 
 
 class FakeConnector:
@@ -65,34 +53,29 @@ class FakeConnector:
         logging.info("[%s] connect(action=%r)", self._name, output_interface.action)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _inject_uwb_pose(x: float, y: float, yaw: float) -> None:
+    """Replace UnitreeG1Provider's UWB cache so a UwbPose criterion can pass."""
+    g1 = UnitreeG1Provider()
+    g1._uwb_pose = TopicCache(value={"x": x, "y": y, "yaw": yaw}, last_seen_ts=time.monotonic())
 
 
 def main() -> int:
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s :: %(message)s",
         force=True,
     )
 
-    # Reset singleton in case this script was imported before (REPL etc.).
     TaskSrvProvider.reset()  # type: ignore[attr-defined]
+    UnitreeG1Provider.reset()  # type: ignore[attr-defined]
 
-    # Cancel keywords let us short-circuit the 25 s sub-task timeout below.
-    # bind() now only takes the non-singleton Connectors (CONV-010);
-    # UnitreeG1Provider is fetched as a @singleton inside TaskSrvProvider's
-    # __init__ — its default-empty TopicCaches behave as "never received",
-    # which keeps every success-criterion evaluating False forever.
-    ts = TaskSrvProvider(TaskSrvConfig(cancel_keywords=["취소", "그만"]))
-    ts.bind(
-        move_connector=FakeConnector("MOVE"),
-        speak_connector=FakeConnector("SPEAK"),
-    )
-    ts.start()  # loads config.scenarios.ALL — refrigerator_pickup at minimum
+    # cancel_keywords intentionally excludes "그만" so it doesn't shadow the
+    # move_test exit keyword in this demo.
+    ts = TaskSrvProvider(TaskSrvConfig(cancel_keywords=["취소"]))
+    ts.bind(move_connector=FakeConnector("MOVE"), speak_connector=FakeConnector("SPEAK"))
+    ts.start()  # loads config/scenarios/*.yaml (move_test + refrigerator_pickup)
 
-    bg = TaskSrvBg(TaskSrvBgConfig(tick_rate_hz=10.0))
+    bg = TaskSrvBg(TaskSrvBgConfig())   # loop tuning lives on TaskSrvConfig now
     stop_event = threading.Event()
     bg.set_stop_event(stop_event)
     bg_thread = threading.Thread(target=bg.run, name="TaskSrvBg", daemon=True)
@@ -104,28 +87,41 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _on_sigint)
 
-    # ------------------------------------------------------------------
-    # Timeline of injected events (Ctrl+C aborts at any point)
-    # ------------------------------------------------------------------
     try:
-        logging.info(">>> T+0.0s: provider IDLE (state=%s)", ts.state.value)
+        logging.info(">>> T+0.0s: IDLE (state=%s)", ts.state.value)
         time.sleep(1.0)
 
-        logging.info(">>> T+1.0s: inject trigger '냉장고에서 오이 가져와'")
-        ts.on_audio("냉장고에서 오이 가져와", ts=time.monotonic())
+        logging.info(">>> T+1.0s: trigger '이동 테스트 시작'")
+        ts.on_audio("이동 테스트 시작", ts=time.monotonic())
+        time.sleep(1.0)
 
-        # Sub-task 0 timeout_s=25.0 — wait a few seconds to watch tick noop,
-        # then trigger the cancel path so we observe the full state cycle.
-        time.sleep(3.0)
+        logging.info(">>> T+2.0s: command '냉장고로 가'")
+        ts.on_audio("냉장고로 가", ts=time.monotonic())
+        time.sleep(1.0)
 
-        logging.info(">>> T+4.0s: state=%s, active=%r",
-                     ts.state.value, ts.active_scenario_name)
-
-        logging.info(">>> T+4.0s: inject cancel keyword '취소'")
-        ts.on_audio("취소", ts=time.monotonic())
-
+        logging.info(">>> T+3.0s: inject fake UWB pose at the refrigerator")
+        _inject_uwb_pose(2.10, -0.40, 1.5708)
         time.sleep(1.5)
-        logging.info(">>> T+5.5s: state=%s (should be IDLE)", ts.state.value)
+
+        # Consume-once proof: fridge leg is done; current sub-task is now
+        # await_table_cmd, which only listens for 식탁. Re-issuing 냉장고 must
+        # be ignored (no [SPEAK]/[MOVE], state stays active on move_test).
+        logging.info(">>> T+4.5s: RE-ISSUE '냉장고로 가' (should be IGNORED) — sub-task='%s'",
+                     ts.active_sub_task.name if ts.active_sub_task else None)
+        ts.on_audio("냉장고로 가", ts=time.monotonic())
+        time.sleep(1.0)
+        logging.info(">>> T+5.5s: state=%s sub-task=%s (still awaiting 식탁)",
+                     ts.state.value, ts.active_sub_task.name if ts.active_sub_task else None)
+
+        logging.info(">>> T+5.5s: command '식탁으로 가'")
+        ts.on_audio("식탁으로 가", ts=time.monotonic())
+        time.sleep(1.0)
+
+        logging.info(">>> T+6.5s: inject fake UWB pose at the table")
+        _inject_uwb_pose(0.50, 0.30, -1.5708)
+        time.sleep(1.5)
+
+        logging.info(">>> T+8.0s: state=%s (scenario should have ended → idle)", ts.state.value)
 
     except KeyboardInterrupt:
         logging.info(">>> KeyboardInterrupt — stopping")
