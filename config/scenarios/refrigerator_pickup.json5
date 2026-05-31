@@ -1,0 +1,51 @@
+// 냉장고에서 오이 가져오기 (KIST MBO 시연 1단계).
+//
+// KAPEX: "G1, 냉장고에서 오이 하나 가져다주시겠어요?"
+// G1   : ① 냉장고 이동 → ② 문 개방 → ③ 오이 파지 → ④ 조리대 tray 안착.
+//
+// 각 sub-task는 on_create에서 한국어 안내(speak), on_start에서 영어 VLA prompt(move)를
+// 발사하고, 성공은 UnitreeG1Provider 센서 상태로만 판정한다(VLA 자기보고 불신).
+// target/tolerance는 placeholder — 실제 시연 공간에서 캘리브레이션할 것.
+// tol_yaw 생략 시 기본 무한대(yaw 무시) — UWB yaw 미신뢰(kp_angular=0).
+{
+  name: "refrigerator_pickup",
+  triggers: ["냉장고에서 오이", "오이 가져와", "오이 하나 가져다", "오이 부탁"],
+  sub_tasks: [
+    // ① 냉장고 앞 정렬
+    {
+      name: "approach_fridge",
+      on_create: [{ speak: "냉장고 앞으로 갑니다." }],
+      on_start:  [{ move: "Walk to the refrigerator and face the door." }],
+      success: { type: "uwb_pose", target: [2.10, -0.40, 1.5708], tol_xy: 0.20, timeout_s: 25 },
+    },
+    // ② 냉장고 문 개방 (왼손 그리퍼)
+    {
+      name: "open_door",
+      on_create: [{ speak: "냉장고 문을 엽니다." }],
+      on_start:  [{ move: "Open the refrigerator door with the left hand." }],
+      success: { type: "joint_state", joint: "left_gripper_finger_1", pos: 0.85, tol: 0.05, timeout_s: 10 },
+    },
+    // ③ 오이 파지 (오른손 그리퍼)
+    {
+      name: "grasp_cucumber",
+      on_create: [{ speak: "오이를 집겠습니다." }],
+      on_start:  [{ move: "Pick up the cucumber from the top shelf." }],
+      success: { type: "joint_state", joint: "right_gripper_finger_1", pos: 0.20, tol: 0.03, timeout_s: 15 },
+    },
+    // ④ 조리대 복귀 + tray 안착 (위치 + 오른손 release 동시)
+    {
+      name: "place_on_tray",
+      on_create: [{ speak: "조리대에 오이를 놓습니다." }],
+      on_start:  [{ move: "Return to the counter and place the cucumber on the tray." }],
+      success: {
+        type: "composite",
+        timeout_s: 20,
+        children: [
+          { type: "uwb_pose", target: [0.50, 0.30, -1.5708], tol_xy: 0.15 },
+          { type: "joint_state", joint: "right_gripper_finger_1", pos: 0.80, tol: 0.05 },
+        ],
+      },
+      on_success: [{ speak: "오이 가져왔습니다." }],
+    },
+  ],
+}

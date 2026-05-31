@@ -1,0 +1,47 @@
+// 선형 음성-명령 이동 테스트 — sub-task를 순서대로 1회씩 소비.
+//
+// "이동 테스트 시작"으로 시나리오를 켜면, 각 leg가 두 sub-task로 진행:
+//   ① await_*_cmd : 해당 음성 키워드를 들을 때까지 대기(voice_keyword). 이동 없음.
+//   ② go_*        : move 발사 + UWB 도착 판정(uwb_pose). 도착해야 다음 leg로.
+//
+// loop 없음 → 한 번 소비한 sub-task는 다시 활성화되지 않는다. 엔진은 *현재*
+// sub-task의 criterion만 평가하므로, 예: 냉장고 도착 후 현재는 await_table_cmd
+// 이고 여기서는 "식탁..." 키워드만 듣는다. 사용자가 "냉장고로 가"를 다시 말해도
+// 매칭 대상이 없어 무반응 — Q3에서 요구한 "소비된 명령 재호출 무반응".
+//
+// tol_yaw 생략 → 기본 무한대(yaw 무시). target/tolerance는 placeholder.
+{
+  name: "move_test",
+  triggers: ["이동 테스트 시작", "이동 테스트"],
+  exit_keywords: ["시연 끝", "그만"],   // 진행 중 언제든 탈출 → IDLE
+  on_scenario_start: [{ speak: "이동 테스트를 시작합니다. 냉장고로 가, 또는 식탁으로 가 라고 말씀해주세요." }],
+  on_scenario_end:   [{ speak: "이동 테스트를 마칩니다." }],
+  sub_tasks: [
+    // ── 냉장고 leg ──────────────────────────────────────────────
+    {
+      name: "await_fridge_cmd",
+      success: { type: "voice_keyword", keywords: ["냉장고로 가", "냉장고로"], timeout_s: 300 },
+    },
+    {
+      name: "go_fridge",
+      on_create: [{ speak: "냉장고로 갑니다." }],
+      on_start:  [{ move: "Walk to the refrigerator and face the door.", delay: 1.0 }],
+      success: { type: "uwb_pose", target: [2.10, -0.40, 1.5708], tol_xy: 0.20, timeout_s: 25 },
+      on_success: [{ speak: "냉장고에 도착했습니다." }],
+      on_fail:    [{ speak: "냉장고 이동에 실패했습니다." }],
+    },
+    // ── 식탁 leg ────────────────────────────────────────────────
+    {
+      name: "await_table_cmd",
+      success: { type: "voice_keyword", keywords: ["식탁으로 가", "식탁으로"], timeout_s: 300 },
+    },
+    {
+      name: "go_table",
+      on_create: [{ speak: "식탁으로 갑니다." }],
+      on_start:  [{ move: "Walk to the table.", delay: 1.0 }],
+      success: { type: "uwb_pose", target: [0.50, 0.30, -1.5708], tol_xy: 0.20, timeout_s: 25 },
+      on_success: [{ speak: "식탁에 도착했습니다." }],
+      on_fail:    [{ speak: "식탁 이동에 실패했습니다." }],
+    },
+  ],
+}
