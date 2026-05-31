@@ -1,5 +1,5 @@
 """
-Speak Connector [TASK-45, REQ-29]
+Speak Connector [TASK-45, REQ-29].
 
 Routes SpeakInput.action (text) to the TTS Provider for synthesis. No
 routing decision — single backend.
@@ -8,17 +8,18 @@ Threading + error policy:
   - connect() is async per OM1 ActionConnector contract.
   - Caller is TaskSrvProvider._schedule_coro — **fire-and-forget**.
     Exceptions raised here turn into "Task exception was never retrieved"
-    warnings and disappear; implementation MUST try/except + log + swallow.
+    warnings and disappear; connect() therefore try/except + log + swallow
+    (asyncio.CancelledError is re-raised — cooperative cancellation, not a
+    synthesis failure).
+  - E-STOP cancellation + backpressure are TTSProvider's responsibility
+    (TTSProvider.cancel() / synthesize() gate); the connector only forwards.
 
-TODO(REQ-29) [TASK-45]: connect() — await self._tts.synthesize(text);
-                        try/except log + swallow per fire-and-forget caller.
 TODO(REQ-29) [TASK-45]: stop() lifecycle — track in-flight asyncio tasks,
                         cancel on shutdown. Add Connector to run.py
                         _stop_runtime once stop() actually does something.
-TODO(REQ-29) [TASK-45]: E-STOP cancellation — interrupt mid-utterance via
-                        TTSProvider.cancel().
 """
 
+import asyncio
 import logging
 
 from actions.base import ActionConfig, ActionConnector
@@ -37,6 +38,26 @@ class SpeakConnector(ActionConnector[ActionConfig, SpeakInput]):
         logging.info("SpeakConnector: skeleton initialized")
 
     async def connect(self, output_interface: SpeakInput) -> None:
-        # TODO(REQ-29) [TASK-45]: try/except — log + swallow, NEVER re-raise
-        # TODO(REQ-29) [TASK-45]: await self._tts.synthesize(output_interface.action)
-        raise NotImplementedError("SpeakConnector.connect: TBD [TASK-45]")
+        """Forward the text to TTSProvider.synthesize (fire-and-forget).
+
+        The caller (TaskSrvProvider._schedule_coro) discards the asyncio.Task,
+        so any exception raised here would surface only as a "Task exception
+        was never retrieved" warning and be lost. We therefore try/except +
+        log + swallow, NEVER re-raise — a failed announcement must not crash
+        the dispatch path. E-STOP interruption and backpressure are the
+        TTSProvider's responsibility (cancel() / gate); the connector only
+        forwards.
+
+        ``asyncio.CancelledError`` is re-raised: it is cooperative task
+        cancellation (stop() / shutdown), not a synthesis failure.
+        """
+        text = output_interface.action
+        try:
+            await self._tts.synthesize(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception(
+                "SpeakConnector.connect: TTS synthesize failed for %r; "
+                "swallowing (fire-and-forget caller)", text,
+            )
