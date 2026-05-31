@@ -1,26 +1,17 @@
 """
-KIST DRL G1 Workstation entrypoint (mini-runner per CONV-001).
+KIST DRL G1 Workstation entrypoint — mini-runner replacing OM1 ModeCortexRuntime
+(the demo uses TaskSrvProvider, not an LLM Cortex; CONV-001/004).
 
-Explicit Provider lifecycle: replaces OM1 ``ModeCortexRuntime`` since the
-KIST demo uses :class:`TaskSrvProvider` instead of an LLM Cortex (CONV-004).
+Startup order is load-bearing (CONV-001/010): UnitreeG1 → STT/TTS/VLA/Nav →
+Move/Speak connectors → TaskSrvProvider(bind + start) → backgrounds → SoundSensor
+(last, so STT callbacks fan out only once TaskSrvBg can drain the queue — R4).
+Other Provider→Provider deps are @singletons fetched in consumers' __init__, so
+construction order alone wires them. Shutdown is reverse-order.
 
-Startup order (CONV-001 + CONV-010): UnitreeG1 → STT / TTS / VLA →
-Move/Speak connectors → TaskSrvProvider (bind connectors, start loads
-scenarios) → backgrounds (TaskSrvBg, GUIBackground) → SoundSensor (last —
-STT callbacks fan out only after the drain-side TaskSrvBg is alive).
-All other Provider deps are @singletons fetched in consumer __init__;
-the construction order above is load-bearing per CONV-010.
-Shutdown is reverse-order. SIGINT/SIGTERM trigger the stop event.
-
-Use ``--dry-run`` to validate the wiring graph without invoking ``.start()``
-(most provider backends are still NotImplementedError during scaffold).
-
-Use ``--scaffold-loop`` to keep the runtime alive in scaffold mode:
-Provider/SoundSensor ``.start()`` calls that raise NotImplementedError are
-logged + skipped instead of aborting. TaskSrvProvider (the only fully
-implemented Provider today) still starts normally so its tick loop +
-``on_audio`` queue actually run — useful for exercising the state machine
-end-to-end before the backends land.
+CLI: ``python src/run.py [scenario]`` loads config/scenarios/<scenario>.json5.
+  --dry-run        wire components but skip .start()
+  --scaffold-loop  skip backends still raising NotImplementedError; keep
+                   TaskSrvProvider's loop alive to exercise the state machine.
 """
 
 import argparse
@@ -32,10 +23,8 @@ from pathlib import Path
 from typing import List, Optional, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Make `config/` (project-root sibling of src/) importable. TaskSrvProvider
-# lazily imports ``config.scenarios.ALL`` in start(); Python's default sys.path
-# only contains src/ when running ``python src/run.py``, so the lazy import
-# would fail with ModuleNotFoundError without this prepend.
+# Put repo root on sys.path so TaskSrvProvider.start()'s lazy `import
+# config.scenarios` resolves when run as `python src/run.py`.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -63,11 +52,6 @@ class Startable(Protocol):
     def stop(self) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-
 def _setup_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -75,19 +59,12 @@ def _setup_logging(level: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Component construction + wiring
-# ---------------------------------------------------------------------------
-
-
 class _Runtime:
-    """Aggregate of all live components — for reverse-order shutdown."""
+    """Aggregate of live components for reverse-order shutdown."""
 
     def __init__(self) -> None:
-        # Base providers in dependency order. start() runs over this list
-        # left-to-right, stop() over reversed(). TaskSrvProvider is held in
-        # its own slot below because its start() also loads scenarios and
-        # must run AFTER every base provider it bind()s.
+        # task_srv is its own slot (not in `providers`) because its start()
+        # loads scenarios and must run after every base provider it bind()s.
         self.providers: List[Startable] = []
         self.task_srv: Optional[TaskSrvProvider] = None
         self.sound_sensor: Optional[SoundSensor] = None
@@ -96,50 +73,42 @@ class _Runtime:
         self.stop_event = threading.Event()
 
 
-def _build_runtime() -> _Runtime:
-    """Construct + wire every component. Does NOT call ``.start()``."""
+def _build_runtime(scenario_file: Optional[str] = None) -> _Runtime:
+    """Construct + wire every component (no ``.start()``).
+
+    ``scenario_file`` (CLI positional) picks which config/scenarios/*.json5
+    TaskSrvProvider loads; None keeps TaskSrvConfig's default.
+    """
     rt = _Runtime()
 
-    # Base providers. All Provider→Provider deps are @singletons (CONV-010),
-    # so STT/TTS/VLA/Navigation fetch UnitreeG1 inside their own __init__.
-    # The only requirement is that UnitreeG1 is constructed FIRST so that
-    # fetch returns the run.py-built instance instead of creating a default
-    # one.
+    # UnitreeG1 FIRST so the others' @singleton fetch (in their __init__)
+    # returns this instance, not a fresh default (CONV-010).
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
-    tts = TTSProvider(TTSConfig())  # CONV-010: __init__ fetches unitree_g1 (TBD)
+    tts = TTSProvider(TTSConfig())
     vla = VLAProvider(VLAConfig())
-    # CONV-012 2026-05-26: locomotion split out of VLA into PC NavigationProvider.
-    navigation = NavigationProvider(NavigationProviderConfig())
+    navigation = NavigationProvider(NavigationProviderConfig())  # CONV-012: loco split off VLA
     rt.providers = [unitree_g1, stt, tts, vla, navigation]
 
-    # Connectors. They are stateless adapters with no lifecycle of their
-    # own; their __init__ fetches the relevant Provider singletons that
-    # this function constructed above. No bind() ceremony — the @singleton
-    # decorator + CONV-001 ordering guarantees the right instances.
+    # Connectors: stateless adapters; their __init__ fetches provider singletons.
     move_conn = MoveConnector(ActionConfig())
     speak_conn = SpeakConnector(ActionConfig())
 
-    # Orchestrator (separate slot — started AFTER base providers since it
-    # binds the non-singleton Connectors and loads scenarios inside start()).
-    rt.task_srv = TaskSrvProvider(TaskSrvConfig())
+    # Orchestrator — non-singleton connectors injected via bind() (CONV-010).
+    task_cfg = TaskSrvConfig() if scenario_file is None else TaskSrvConfig(scenario_file=scenario_file)
+    rt.task_srv = TaskSrvProvider(task_cfg)
     rt.task_srv.bind(move_connector=move_conn, speak_connector=speak_conn)
+    logging.info("TaskSrvProvider scenario: %s", task_cfg.scenario_file)
 
-    # STT → TaskSrv bridge. SoundSensor fetches STT + TaskSrv as singletons
-    # in its own __init__ (CONV-010). Started LAST (after backgrounds) so
-    # STT callbacks don't fan out before TaskSrvBg is alive to drain the
-    # inbound queue (R4).
+    # STT → TaskSrv bridge; started LAST (after backgrounds) — see R4 below.
     rt.sound_sensor = SoundSensor(SoundSensorConfig())
 
-    rt.backgrounds = [
-        TaskSrvBg(TaskSrvBgConfig()),
-        GUIBackground(GUIBackgroundConfig()),
-    ]
+    rt.backgrounds = [TaskSrvBg(TaskSrvBgConfig()), GUIBackground(GUIBackgroundConfig())]
     return rt
 
 
 def _start_component(component: Startable, scaffold_loop: bool) -> None:
-    """Call ``.start()`` on ``component``; swallow NotImplementedError in scaffold-loop mode."""
+    """``.start()`` ``component``; swallow NotImplementedError in scaffold-loop mode."""
     name = type(component).__name__
     logging.info("Starting %s", name)
     try:
@@ -151,7 +120,7 @@ def _start_component(component: Startable, scaffold_loop: bool) -> None:
 
 
 def _start_runtime(rt: _Runtime, dry_run: bool, scaffold_loop: bool) -> None:
-    """Call ``.start()`` on each component in dependency order."""
+    """``.start()`` each component in dependency order."""
     if dry_run:
         logging.info("Dry run: skipping .start() on all components")
         return
@@ -161,12 +130,10 @@ def _start_runtime(rt: _Runtime, dry_run: bool, scaffold_loop: bool) -> None:
 
     assert rt.task_srv is not None
     logging.info("Starting TaskSrvProvider (loads scenarios)")
-    # TaskSrvProvider.start() is implemented; no NotImplementedError to swallow.
     rt.task_srv.start()
 
-    # Backgrounds before SoundSensor (R4): once SoundSensor.start()
-    # registers the STT callback, transcripts must have a live drain on
-    # the other side or they queue up during the start gap.
+    # Backgrounds before SoundSensor (R4): the STT callback SoundSensor.start()
+    # registers needs a live TaskSrvBg drain, or transcripts pile up.
     for bg in rt.backgrounds:
         bg.set_stop_event(rt.stop_event)
         t = threading.Thread(target=bg.run, name=type(bg).__name__, daemon=True)
@@ -190,10 +157,8 @@ def _stop_runtime(rt: _Runtime) -> int:
 
     if rt.sound_sensor is not None and not _safe_stop(rt.sound_sensor):
         failures += 1
-
     if rt.task_srv is not None and not _safe_stop(rt.task_srv):
         failures += 1
-
     for p in reversed(rt.providers):
         if not _safe_stop(p):
             failures += 1
@@ -202,7 +167,7 @@ def _stop_runtime(rt: _Runtime) -> int:
 
 
 def _safe_stop(component: Startable) -> bool:
-    """Stop ``component``; return True on clean stop (or scaffold NotImpl)."""
+    """Stop ``component``; True on clean stop (or scaffold NotImplementedError)."""
     name = type(component).__name__
     try:
         component.stop()
@@ -216,13 +181,18 @@ def _safe_stop(component: Startable) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="kist-drl-g1-workstation")
+    parser.add_argument(
+        "scenario",
+        nargs="?",
+        default=None,
+        help=(
+            "Scenario to run — a file under config/scenarios/ (e.g. 'move_test' "
+            "or 'move_test.json5'; the .json5 suffix is optional). Omit for the "
+            "TaskSrvConfig default (move_test.json5)."
+        ),
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument(
         "--dry-run",
@@ -233,22 +203,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--scaffold-loop",
         action="store_true",
         help=(
-            "Keep the runtime alive in scaffold mode: Provider/SoundSensor "
-            ".start() calls that raise NotImplementedError are logged + "
-            "skipped (TaskSrvProvider still starts, tick loop runs). "
+            "Scaffold mode: skip Provider/SoundSensor .start() calls that raise "
+            "NotImplementedError; TaskSrvProvider still starts and its loop runs. "
             "SIGINT exits cleanly."
         ),
     )
     args = parser.parse_args(argv)
 
     _setup_logging(args.log_level)
-    # Anchor .env at the repo root rather than cwd so the runner works no
-    # matter where the operator invokes it from.
+    # Anchor .env at repo root so the runner works from any cwd.
     dotenv.load_dotenv(dotenv_path=REPO_ROOT / ".env")
 
-    rt = _build_runtime()
+    scenario_file = args.scenario
+    if scenario_file and not scenario_file.endswith(".json5"):
+        scenario_file += ".json5"
+    rt = _build_runtime(scenario_file)
 
-    # Trap SIGINT/SIGTERM → set stop event → main loop unblocks
     def _on_signal(signum, _frame):
         logging.warning("Received signal %d, shutting down", signum)
         rt.stop_event.set()
@@ -261,10 +231,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _start_runtime(rt, dry_run=args.dry_run, scaffold_loop=args.scaffold_loop)
     except NotImplementedError as e:
         logging.error("Component not yet implemented: %s", e)
-        logging.error(
-            "Use --dry-run to validate wiring only, or --scaffold-loop to keep "
-            "TaskSrvProvider alive while skipping un-implemented backends."
-        )
+        logging.error("Use --dry-run (wiring only) or --scaffold-loop (skip un-implemented backends).")
         _stop_runtime(rt)
         return 1
     except Exception:
@@ -277,14 +244,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                      len(rt.providers), len(rt.backgrounds))
         return 0
 
-    # Block until signal
     try:
-        rt.stop_event.wait()
+        rt.stop_event.wait()       # block until SIGINT/SIGTERM
     finally:
         failures = _stop_runtime(rt)
-    # Non-zero exit when any component's .stop() raised (post-CONV-009 the
-    # log is the verification surface — also surface it through the exit code
-    # so demo wrappers / systemd can pick it up).
+    # Surface .stop() failures via exit code (CONV-009: logs are the verification surface).
     return 2 if failures else 0
 
 
