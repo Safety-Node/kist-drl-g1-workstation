@@ -40,6 +40,7 @@ dependencies = [
     # called from our run.py path.
     "openai==1.60.1",
     "typer==0.15.1",                # OM1 cli.py / scripts/generate_schema.py
+    "google-cloud-speech>=2.21.0",
 ]
 
 [project.optional-dependencies]
