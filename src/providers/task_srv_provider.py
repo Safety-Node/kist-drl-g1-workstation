@@ -134,6 +134,7 @@ class Action(ABC):
     """
 
     dispatch_async: bool = False
+    delay: float = 0.0          # per-action pre-delay (s); concrete actions set it from json5
 
     @abstractmethod
     async def run(self, ctx: ScenarioContext, hub: "ConnectorHub") -> None: ...
@@ -341,6 +342,7 @@ class Speak(Action):
     dispatch_async = True   # class var (not a dataclass field)
 
     text: str
+    delay: float = 0.0      # per-action pre-delay (s) before this connect; from json5
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.speak(resolve_str(self.text, ctx))
@@ -353,6 +355,7 @@ class Move(Action):
     dispatch_async = True   # class var (not a dataclass field)
 
     prompt: str
+    delay: float = 0.0      # per-action pre-delay (s) before this connect; from json5
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.move(resolve_str(self.prompt, ctx))
@@ -364,6 +367,7 @@ class SetContext(Action):
 
     key: str
     value: T.Any
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         ctx[self.key] = resolve_value(self.value, ctx)
@@ -374,6 +378,7 @@ class Wait(Action):
     """Pause ``seconds`` — awaited inline so it actually delays the sequence."""
 
     seconds: float
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await asyncio.sleep(self.seconds)
@@ -384,6 +389,7 @@ class Custom(Action):
     """Run a Python-registered coroutine (``CUSTOM_ACTIONS[name]``). Awaited inline."""
 
     name: str
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         fn = CUSTOM_ACTIONS.get(self.name)
@@ -449,14 +455,8 @@ class TaskSrvConfig:
     # Drop transcripts queued before a pause/resume gap longer than this.
     # Assumes ts is time.monotonic() seconds (matches TranscriptEvent.ts). 0 disables.
     stale_audio_s: float = 5.0
-    # Dispatcher gaps (seconds) around each connect dispatch. Connects are
-    # fire-and-forget (OM1-style), so pacing comes from the hook runner awaiting
-    # these gaps between dispatches — e.g. speak_post holds the sequence after a
-    # Speak so TTS audio can play before the next action fires. Default 0 = none.
-    speak_pre_delay_s: float = 0.0
-    speak_post_delay_s: float = 0.0
-    move_pre_delay_s: float = 0.0
-    move_post_delay_s: float = 0.0
+    # NOTE: connect pacing is NOT here — each action carries its own pre-delay
+    # (`delay`) in the scenario json5 (per sub-task, per action). See Action.delay.
     # Loop pump (owned by TaskSrvProvider.run).
     heartbeat_every_ticks: int = 50          # INFO heartbeat cadence; CONV-009. 0 disables.
     swallow_tick_exceptions: bool = True     # log+continue vs stop the loop
@@ -484,19 +484,19 @@ def _req_str(value: T.Any, field_name: str) -> str:
     return value
 
 
-_ACTION_KEYS: T.Dict[str, T.Callable[[T.Any], Action]] = {
-    "speak": lambda v: Speak(text=_req_str(v, "speak")),
-    "move": lambda v: Move(prompt=_req_str(v, "move")),
-    "wait": lambda v: Wait(seconds=float(v)),
-    "custom": lambda v: Custom(name=_req_str(v, "custom")),
-    "set_context": lambda v: _build_set_context(v),
+_ACTION_KEYS: T.Dict[str, T.Callable[[T.Any, float], Action]] = {
+    "speak": lambda v, d: Speak(text=_req_str(v, "speak"), delay=d),
+    "move": lambda v, d: Move(prompt=_req_str(v, "move"), delay=d),
+    "wait": lambda v, d: Wait(seconds=float(v), delay=d),
+    "custom": lambda v, d: Custom(name=_req_str(v, "custom"), delay=d),
+    "set_context": lambda v, d: _build_set_context(v, d),
 }
 
 
-def _build_set_context(v: T.Any) -> Action:
+def _build_set_context(v: T.Any, delay: float) -> Action:
     if not isinstance(v, dict) or "key" not in v or "value" not in v:
         raise ScenarioConfigError("set_context must be a mapping with 'key' and 'value'")
-    return SetContext(key=_req_str(v["key"], "set_context.key"), value=v["value"])
+    return SetContext(key=_req_str(v["key"], "set_context.key"), value=v["value"], delay=delay)
 
 
 _CRITERION_BUILDERS: T.Dict[str, T.Callable[[T.Mapping], Criterion]] = {
@@ -551,7 +551,8 @@ def build_action(node: T.Any) -> Action:
     present = [k for k in node if k in _ACTION_KEYS]
     if len(present) != 1:
         raise ScenarioConfigError(f"action node needs exactly one of {sorted(_ACTION_KEYS)}; got {sorted(node)}")
-    return _ACTION_KEYS[present[0]](node[present[0]])
+    delay = float(node.get("delay", 0.0))
+    return _ACTION_KEYS[present[0]](node[present[0]], delay)
 
 
 def build_criterion(node: T.Any) -> Criterion:
@@ -915,30 +916,28 @@ class TaskSrvProvider:
 
     # -- hook execution ----------------------------------------------------
     async def _run_actions(self, actions: T.List[Action]) -> None:
-        """Run a hook list. Connect actions (Speak/Move, ``dispatch_async``) are
-        fired and NOT awaited (OM1-style fire-and-forget); control actions
-        (Wait/SetContext/Custom) are awaited inline so their effect is sequenced.
-        Pacing between actions comes from the per-type pre/post gaps, which the
-        runner awaits — that is what spaces consecutive connect dispatches."""
-        for action in actions:
-            pre, post = self._action_gaps(action)
-            if pre > 0:
-                await asyncio.sleep(pre)
-            if action.dispatch_async and self._loop is not None:
-                self._loop.create_task(self._safe_run(action))   # fire-and-forget connect
-            else:
-                await self._safe_run(action)                     # inline (control / no loop)
-            if post > 0:
-                await asyncio.sleep(post)
+        """Run a hook list.
 
-    def _action_gaps(self, action: Action) -> T.Tuple[float, float]:
-        """(pre, post) dispatch gaps for an action, resolved by type from config."""
-        cfg = self._config
-        if isinstance(action, Speak):
-            return (cfg.speak_pre_delay_s, cfg.speak_post_delay_s)
-        if isinstance(action, Move):
-            return (cfg.move_pre_delay_s, cfg.move_post_delay_s)
-        return (0.0, 0.0)
+        Each action carries its own pre-delay (``action.delay``, from the json5).
+        Connect actions (Speak/Move, ``dispatch_async``) are dispatched as
+        INDEPENDENT timer tasks: each sleeps its own ``delay`` from this hook's
+        entry, then fires connect fire-and-forget. They do NOT cascade — giving
+        one action a delay does not push the others. Control actions
+        (Wait/SetContext/Custom) are awaited inline (their effect must be
+        sequenced); their ``delay`` applies as an inline pre-sleep."""
+        for action in actions:
+            if action.dispatch_async and self._loop is not None:
+                self._loop.create_task(self._delayed_dispatch(action))   # independent timer
+            else:
+                if action.delay > 0:
+                    await asyncio.sleep(action.delay)
+                await self._safe_run(action)                             # inline control
+
+    async def _delayed_dispatch(self, action: Action) -> None:
+        """Wait this action's own pre-delay, then fire its connect (fire-and-forget)."""
+        if action.delay > 0:
+            await asyncio.sleep(action.delay)
+        await self._safe_run(action)
 
     async def _safe_run(self, action: Action) -> None:
         try:

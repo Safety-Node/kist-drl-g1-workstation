@@ -500,9 +500,10 @@ call is just an Action, so it is included or omitted per hook (empty list =
 no call). Connector dispatch is **fire-and-forget** (OM1-style): `Speak`/`Move`
 fire their `connect()` and the hook runner does NOT await completion;
 `Wait`/`SetContext`/`Custom` are awaited inline because their effect must be
-sequenced. Pacing between dispatches comes from per-type **dispatcher gaps**
-(`{speak,move}_{pre,post}_delay_s`) that the runner awaits — e.g. `speak_post`
-holds the sequence after a Speak so TTS audio can play before the next action.
+sequenced. Pacing is **per-action**: each action node in the scenario json5
+may carry a `delay` (seconds) — an independent pre-delay applied to THAT
+action's connect, measured from the hook's entry, so connect actions fire as
+independent timer tasks and one action's delay does NOT push the others.
 Success is a polymorphic `Criterion` that reads
 sensors AND voice transcripts: `voice_choice` writes the chosen value to a
 per-activation blackboard; later sub-tasks reference it via `{dest.target}`
@@ -537,10 +538,11 @@ and one-provider-one-file matches the rest of the codebase.
 - ✅ No new dependency — reuses the existing `json5` already in pyproject.
 - ✅ Single-file provider (loop owned by provider); `TaskSrvBg` is a thin
   thread host. No shim / no package indirection.
-- ⚠️ Connector dispatch is fire-and-forget; pacing via dispatcher gaps
-  (`{speak,move}_{pre,post}_delay_s` on TaskSrvConfig), awaited between
-  dispatches in the hook runner (not inside the connect). Default 0. The
-  `await_done` per-action opt-in was removed.
+- ⚠️ Connector dispatch is fire-and-forget; pacing is a **per-action `delay`**
+  (seconds) set on each action node in the scenario json5 — an independent
+  pre-delay on that connect (does not cascade to other actions). Default 0.
+  The `await_done` opt-in and the global `{speak,move}_{pre,post}_delay_s`
+  config fields were removed.
 
 ### Affected
 - workstation `src/providers/task_srv_provider.py` (the whole subsystem in one
