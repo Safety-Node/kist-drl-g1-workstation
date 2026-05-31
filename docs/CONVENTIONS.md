@@ -480,6 +480,73 @@ vyaw)` 발행. Kalman Filter 내부 구현. CONV-005 범위 축소.
 
 ---
 
+## CONV-013 — TaskSrvProvider redesign: hook-based sub-task lifecycle + JSON5 scenarios
+
+**Status**: Accepted · **Date**: 2026-05-30
+
+### Context
+The first TaskSrvProvider (CONV-004) was a linear script engine: one keyword
+fired a fixed sub-task list whose only progression was sensor success, and
+every sub-task unconditionally dispatched the Move connector. This blocked
+two needs: (1) freely calling / omitting connectors at each sub-task
+lifecycle point, and (2) voice-gated, dynamic flows ("ask destination →
+drive there → loop"). ACTIVE-state speech was also ignored except cancel.
+
+### Decision
+A sub-task becomes a small lifecycle machine with four hook lists —
+`on_create` / `on_start` / `on_success` / `on_fail` — each an ordered list of
+Actions (`Speak` / `Move` / `SetContext` / `Wait` / `Custom`). A connector
+call is just an Action, so it is included or omitted per hook (empty list =
+no call). Hook lists run as sequential-await coroutines on the TaskSrvBg
+event loop (`[Speak, Move]` speaks then moves; `await_done: false` opts an
+action into fire-and-forget). Success is a polymorphic `Criterion` that reads
+sensors AND voice transcripts: `voice_choice` writes the chosen value to a
+per-activation blackboard; later sub-tasks reference it via `{dest.target}`
+templates resolved at runtime (replacing lambdas, which data files can't hold).
+`loop` + `exit_keywords` support repeating dialog scenarios.
+
+Scenarios move from Python objects to **JSON5 data** (`config/scenarios/*.json5`)
+— narrowing CONV-004's "YAML or Python" to data-for-authoring — with a Python
+type registry + loader (`providers.task_srv.loader`) that validates schema and
+trigger uniqueness at startup. JSON5 (not YAML) is chosen to match the existing
+project config format (`config/sous_chef_g1.json5`) and avoid an extra
+dependency. Rationale: handover — non-developers (KIST) can read/edit scenarios
+as data while the polymorphic *types* stay typed Python.
+
+TaskSrvProvider owns its own asyncio loop (`run(stop_event)`): it pumps
+`tick()` at `tick_rate_hz` and runs hook coroutines on that loop, resolving the
+old per-call `asyncio.run()` bridge (a hooked VLA infer no longer blocks the
+tick). `TaskSrvBg` is just the thread host — its `run()` calls
+`TaskSrvProvider().run(stop_event)` and nothing else.
+
+The whole subsystem is one module, `src/providers/task_srv_provider.py`
+(sections: resolve · context · criteria · actions · model · loader · engine),
+not a package: with no pytest infra (CONV-009) the modularity payoff is nil,
+and one-provider-one-file matches the rest of the codebase.
+
+### Consequences
+- ✅ Connectors freely callable / omittable at create / start / success / fail.
+- ✅ Voice can complete a sub-task → dialog + dynamic targets via blackboard.
+- ✅ Scenarios are data; add one by dropping a `.json5` file, validated at load.
+- ⚠️ Relaxes CONV-004's "success judged from sensors only" — voice criteria
+  can now complete a sub-task. Notion REQ-44 body to be updated.
+- ✅ No new dependency — reuses the existing `json5` already in pyproject.
+- ✅ Single-file provider (loop owned by provider); `TaskSrvBg` is a thin
+  thread host. No shim / no package indirection.
+- ⚠️ Connector-call delays (`{speak,move}_{pre,post}_delay_s` on TaskSrvConfig)
+  added as a TTS-pacing workaround; applied by ConnectorHub, default 0.
+
+### Affected
+- workstation `src/providers/task_srv_provider.py` (the whole subsystem in one
+  module: resolve / context / criteria / actions / model / loader / engine+loop)
+- workstation `src/backgrounds/plugins/task_srv_bg.py` (thin thread host → `provider.run`)
+- workstation `config/scenarios/*.json5` (refrigerator_pickup, move_test) + `__init__.load_all`; old `*.py` removed
+- workstation `scripts/exercise_task_srv.py` (drives the demo flow)
+- workstation `pyproject.toml` (`pyyaml` removed; reuses existing `json5`)
+- Notion REQ-44 (voice-success invariant + JSON5 decision) — follow-up
+
+---
+
 ## Pattern for new conventions
 
 When a decision affects multiple tasks or future code review, add a new
