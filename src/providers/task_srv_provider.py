@@ -342,7 +342,7 @@ class Speak(Action):
     dispatch_async = True   # class var (not a dataclass field)
 
     text: str
-    delay: float = 0.0      # per-action pre-delay (s) before this connect; from json5
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.speak(resolve_str(self.text, ctx))
@@ -355,7 +355,7 @@ class Move(Action):
     dispatch_async = True   # class var (not a dataclass field)
 
     prompt: str
-    delay: float = 0.0      # per-action pre-delay (s) before this connect; from json5
+    delay: float = 0.0
 
     async def run(self, ctx: ScenarioContext, hub: ConnectorHub) -> None:
         await hub.move(resolve_str(self.prompt, ctx))
@@ -455,8 +455,7 @@ class TaskSrvConfig:
     # Drop transcripts queued before a pause/resume gap longer than this.
     # Assumes ts is time.monotonic() seconds (matches TranscriptEvent.ts). 0 disables.
     stale_audio_s: float = 5.0
-    # NOTE: connect pacing is NOT here — each action carries its own pre-delay
-    # (`delay`) in the scenario json5 (per sub-task, per action). See Action.delay.
+    # Connect pacing is per-action (Action.delay in the scenario json5), not here.
     # Loop pump (owned by TaskSrvProvider.run).
     heartbeat_every_ticks: int = 50          # INFO heartbeat cadence; CONV-009. 0 disables.
     swallow_tick_exceptions: bool = True     # log+continue vs stop the loop
@@ -916,15 +915,9 @@ class TaskSrvProvider:
 
     # -- hook execution ----------------------------------------------------
     async def _run_actions(self, actions: T.List[Action]) -> None:
-        """Run a hook list.
-
-        Each action carries its own pre-delay (``action.delay``, from the json5).
-        Connect actions (Speak/Move, ``dispatch_async``) are dispatched as
-        INDEPENDENT timer tasks: each sleeps its own ``delay`` from this hook's
-        entry, then fires connect fire-and-forget. They do NOT cascade — giving
-        one action a delay does not push the others. Control actions
-        (Wait/SetContext/Custom) are awaited inline (their effect must be
-        sequenced); their ``delay`` applies as an inline pre-sleep."""
+        """Run a hook list. Speak/Move dispatch fire-and-forget as independent
+        timers (each waits its own ``delay``, no cascade); Wait/SetContext/Custom
+        run inline after their ``delay``."""
         for action in actions:
             if action.dispatch_async and self._loop is not None:
                 self._loop.create_task(self._delayed_dispatch(action))   # independent timer
