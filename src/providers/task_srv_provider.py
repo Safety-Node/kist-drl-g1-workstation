@@ -822,6 +822,16 @@ class TaskSrvProvider:
     def active_scenario_name(self) -> T.Optional[str]:
         return self._active_scenario.name if self._active_scenario else None
 
+    @property
+    def active_sub_task_index(self) -> int:
+        """0-based index of the active sub-task, or -1 when IDLE (GUI #N/M)."""
+        return self._active_idx if self._active_scenario else -1
+
+    @property
+    def active_sub_task_total(self) -> int:
+        """Number of sub-tasks in the active scenario, or 0 when IDLE (GUI #N/M)."""
+        return len(self._active_scenario.sub_tasks) if self._active_scenario else 0
+
     # -- activation + sub-task lifecycle (hook coroutines on the loop) -----
     def _activate(self, scenario: Scenario) -> None:
         self._active_scenario = scenario
