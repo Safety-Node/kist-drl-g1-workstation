@@ -1,5 +1,5 @@
 """
-Sound Sensor [TASK-46, REQ-44]
+Sound Sensor [TASK-46, REQ-44].
 
 Bridges STTProvider transcripts into TaskSrvProvider's keyword router (CONV-004:
 no Cortex prompt block anymore). Not a @singleton — one instance per mode.
@@ -88,16 +88,20 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Register transcript callback with STT Provider, ready buffer."""
-        # TODO(REQ-44) [TASK-46]: self._stt.register_transcript_callback(self.on_transcript)
-        # TODO(REQ-44) [TASK-46]: self._started = True  # AFTER register succeeds — no partial-init flag
-        raise NotImplementedError("SoundSensor.start: TBD [TASK-46]")
+        self._stt.register_transcript_callback(self.on_transcript)
+        self._started = True
+        logging.info(
+            "SoundSensor: started (min_conf=%.2f, dedupe=%.1fs)",
+            self.config.min_confidence,
+            self.config.dedupe_window_s,
+        )
 
     def stop(self) -> None:
         """Unregister STT callback, clear last-event."""
-        # TODO(REQ-44) [TASK-46]: self._stt.unregister_transcript_callback(self.on_transcript)
-        # TODO(REQ-44) [TASK-46]: self._last_event = None
-        # TODO(REQ-44) [TASK-46]: self._started = False
-        raise NotImplementedError("SoundSensor.stop: TBD [TASK-46]")
+        self._stt.unregister_transcript_callback(self.on_transcript)
+        self._last_event = None
+        self._started = False
+        logging.info("SoundSensor: stopped")
 
     @property
     def started(self) -> bool:
@@ -111,36 +115,54 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         """
         Callback fired by STT Provider for each transcript.
 
-        Threading note: this runs on the STT backend's response thread
-        (gRPC worker for Google STT). The forwarded ``task_srv.on_audio``
-        call mutates TaskSrvProvider state that ``TaskSrvBg.tick()`` also
-        touches — TaskSrvProvider is "single-threaded by design"
-        (CONV-001 + provider docstring) but currently has no lock. See
-        TODO at TaskSrvProvider.on_audio for the planned queue-deferral
-        fix (cross-thread call → enqueue → TaskSrvBg.tick drains).
+        Threading note: runs on the STT backend's response thread (gRPC
+        worker). ``task_srv.on_audio`` enqueues into the inbound queue so
+        all state mutation happens on the TaskSrvBg thread (T3 pattern).
 
-        ``event.is_final`` filtering is done STT-side (STTConfig.interim_results) —
-        we trust the event reaches us only when it should be acted on.
+        ``event.is_final`` filtering is STT-side responsibility
+        (STTConfig.interim_results) — we trust the event here.
 
-        Behaviour (when implemented):
-            1. Drop if ``event.confidence`` is not None and < min_confidence
-               (events without a score pass).
-            2. Strip + skip empty text.
-            3. Dedupe vs ``self._last_event`` within ``dedupe_window_s``
-               (Google STT sometimes emits duplicate finals).
-            4. Update self._last_event.
-            5. Forward to TaskSrvProvider.on_audio for keyword matching.
+        Filter chain:
+            1. Drop if confidence is not None and < min_confidence.
+            2. Strip + drop empty text.
+            3. Dedupe vs _last_event within dedupe_window_s.
+            4. Update _last_event.
+            5. Forward to TaskSrvProvider.on_audio.
         """
-        # TODO(REQ-44) [TASK-46]: drop if event.confidence is not None and < min_confidence
-        # TODO(REQ-44) [TASK-46]: strip + empty check on event.text
-        # TODO(REQ-44) [TASK-46]: dedupe vs self._last_event within dedupe_window_s
-        # TODO(REQ-44) [TASK-46]: self._last_event = event
-        # TODO(REQ-44) [TASK-46]: self._task_srv.on_audio(event.text, event.ts)
-        # TODO(REQ-44) [TASK-46]: log every drop with reason (confidence / empty / dedupe)
-        #                          — pytest is off (CONV-009), logs are the only
-        #                          debugging surface for "I said the keyword but
-        #                          nothing happened" during the demo.
-        raise NotImplementedError("SoundSensor.on_transcript: TBD [TASK-46]")
+        # 1. Confidence filter (missing score passes unconditionally)
+        if event.confidence is not None and event.confidence < self.config.min_confidence:
+            logging.info(
+                "SoundSensor: drop[confidence] score=%.2f < min=%.2f text=%r",
+                event.confidence,
+                self.config.min_confidence,
+                event.text,
+            )
+            return
+
+        # 2. Empty text
+        text = event.text.strip()
+        if not text:
+            logging.info("SoundSensor: drop[empty]")
+            return
+
+        # 3. Dedupe
+        if (
+            self._last_event is not None
+            and self._last_event.text.strip() == text
+            and event.ts - self._last_event.ts < self.config.dedupe_window_s
+        ):
+            logging.debug(
+                "SoundSensor: drop[dedupe] %r (delta=%.2fs)",
+                text,
+                event.ts - self._last_event.ts,
+            )
+            return
+
+        # 4. Update last event
+        self._last_event = event
+
+        # 5. Forward to TaskSrvProvider keyword router
+        self._task_srv.on_audio(event.text, event.ts)
 
     # ------------------------------------------------------------------
     # OM1 FuserInput interface (legacy / Cortex path -- not used by KIST mode)
