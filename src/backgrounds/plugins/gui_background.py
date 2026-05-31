@@ -1,32 +1,37 @@
 """
-GUI Background [TASK-47]
+GUI Background [TASK-47, REQ-41]
 
-Composites camera frame + task status + STT/TTS/E-STOP indicators and
-streams to the wall-mounted Display System.
+Display **data publisher** — does NOT composite/render. Polls the four
+providers (CONV-010/011, no IOProvider) and pushes the latest camera frame +
+a status snapshot over a WebSocket; a separate browser renderer (different
+repo) draws the overlay. (2026-05-31: composite-video → data-only WS, see
+REQ-41 change log.)
 
-Direct polling per CONV-010 (no IOProvider — see CONV-011):
-  - UnitreeG1Provider.color / .estop
-  - TaskSrvProvider.state / .active_scenario_name / .active_sub_task
-  - STTProvider.state
-  - TTSProvider.is_synthesizing
+Per frame tick, every connected client receives two messages:
+  - text (JSON)  : status snapshot (schema below)
+  - binary       : latest camera JPEG bytes (omitted when no frame yet)
 
-Transport TBD: MJPEG over HTTP is the simplest default for a single-LAN
-demo; WebRTC if low-latency interaction becomes a requirement.
-Latency budget: ≤ 200 ms end-to-end to the wall display.
-Recording hook (TBD): mirror composite frames to disk for post-demo
-safety review.
+Status JSON:
+  { "scenario": str|null,
+    "subtask": { "name": str, "i": int, "n": int } | null,
+    "state": "idle|active|success|failed",
+    "estop": bool, "stt": str|null, "tts": bool }
 
-TODO(REQ-41) [TASK-47]: pick transport; implement composer + encoder.
-TODO(REQ-41) [TASK-47]: define overlay schema (scenario / sub-task / state
-                        badge / E-STOP banner / STT state / TTS indicator).
-TODO(REQ-41) [TASK-47]: recording sink to disk.
-TODO(REQ-41) [TASK-47]: optional STT live transcript via
-                        ``stt.register_transcript_callback`` for caption
-                        overlay (push, not poll — characters per second).
+Polled (CONV-010/011):
+  UnitreeG1Provider.color.value (JPEG) / .estop.value
+  TaskSrvProvider.state / .active_scenario_name / .active_sub_task(.name)
+                 / .active_sub_task_index / .active_sub_task_total
+  STTProvider.state · TTSProvider.is_synthesizing
+
+Transport = WebSocket (`websockets`, already a dep; ROS-free renderer).
+Latency budget ≤ 200 ms. Overlay compositing + recording are the renderer's
+job now (out of scope here).
 """
 
+import asyncio
+import json
 import logging
-import time
+from typing import Any, Optional, Tuple
 
 from pydantic import Field
 
@@ -38,97 +43,150 @@ from providers.unitree_g1_provider import UnitreeG1Provider
 
 
 class GUIBackgroundConfig(BackgroundConfig):
-    """Configuration for the GUI streaming background."""
+    """Configuration for the GUI WebSocket publisher."""
 
-    fps: float = Field(
-        default=15.0,
-        gt=0,
-        description=(
-            "Composite-frame publish rate to the display. 15 Hz default "
-            "matches the assumed VLA chunk emission rate (KIST L40 ~63.9 "
-            "ms / chunk, RTX 4090 unmeasured — TBD; see CONV-006) and is "
-            "enough for human-perceivable status; bump for smoother camera "
-            "video."
-        ),
-    )
-    display_url: str = Field(
-        default="http://localhost:8081/stream",
-        description="Display System endpoint (transport TBD — see module docstring).",
-    )
+    fps: float = Field(default=15.0, gt=0, description="Snapshot publish rate (Hz).")
+    ws_host: str = Field(default="0.0.0.0", description="WebSocket bind host.")
+    ws_port: int = Field(default=8081, description="WebSocket bind port.")
     heartbeat_every_frames: int = Field(
-        default=75,                          # 5 s at the default 15 fps
+        default=75,                          # 5 s at 15 fps
         ge=0,
-        description=(
-            "Emit an INFO heartbeat (current Provider state snapshot) every "
-            "N frames. CONV-009: makes the otherwise-silent stream loop "
-            "observable without TRACE-level logging. 0 disables."
-        ),
+        description="INFO heartbeat every N frames (CONV-009 — makes the loop observable). 0 disables.",
     )
 
 
 class GUIBackground(Background[GUIBackgroundConfig]):
-    """Composes Provider state into a display stream (camera + overlays)."""
+    """Polls providers and broadcasts (frame + status) to WebSocket clients."""
 
     def __init__(self, config: GUIBackgroundConfig):
         super().__init__(config)
-        # CONV-010: providers fetched directly (no IOProvider bridge).
-        # run.py constructs all four before GUIBackground.
+        # CONV-010: providers fetched directly (no IOProvider). run.py builds all four first.
         self._unitree_g1 = UnitreeG1Provider()
         self._task_srv = TaskSrvProvider()
         self._stt = STTProvider()
         self._tts = TTSProvider()
+        self._clients: set = set()
         logging.info(
-            "GUIBackground: skeleton initialized (fps=%.1f, display=%s)",
-            config.fps, config.display_url,
+            "GUIBackground: initialized (fps=%.1f, ws=%s:%d)",
+            config.fps, config.ws_host, config.ws_port,
         )
 
     def run(self) -> None:
-        """Composite + push loop (matches TaskSrvBg drift-free pacing pattern)."""
+        """Own an asyncio loop: serve WebSocket + drift-free snapshot/broadcast until stop."""
+        import websockets  # local import keeps the module importable without the dep present
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         period = 1.0 / float(self.config.fps)
-        next_t = time.monotonic()
-        frame_counter = 0
-        heartbeat_n = self.config.heartbeat_every_frames
-        logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
-        # TODO(REQ-41) [TASK-47]: open encoder + display socket here.
-        # try/finally ensures cleanup runs whether the loop exits via
-        # should_stop() OR sleep() interruption — encoder + socket are
-        # OS resources (handles, ports), can't leak them on shutdown.
-        try:
-            while not self.should_stop():
-                try:
-                    # TODO(REQ-41) [TASK-47]: read all provider state, compose
-                    #     overlay onto color frame, push to display socket.
+        hb = self.config.heartbeat_every_frames
+        sched = {"next": loop.time(), "n": 0}
+
+        async def _handler(ws: Any) -> None:
+            # Receive-only renderer: keep the handler alive by draining inbound
+            # (there usually is none) until the client disconnects.
+            self._clients.add(ws)
+            logging.info("GUIBackground: client connected (%d total)", len(self._clients))
+            try:
+                async for _ in ws:
                     pass
-                except Exception:
-                    logging.exception("GUIBackground: frame tick raised; continuing")
-                frame_counter += 1
-                if heartbeat_n and frame_counter % heartbeat_n == 0:
-                    logging.info(
-                        "GUIBackground: heartbeat frame=%d task=%s estop=%s synth=%s",
-                        frame_counter,
-                        self._task_srv.state.value,
-                        bool(self._unitree_g1.estop.value),
-                        self._tts.is_synthesizing,
-                    )
-                next_t += period
-                dt = next_t - time.monotonic()
-                if dt > 0:
-                    if not self.sleep(dt):
-                        return  # stop_event fired during sleep → finally runs
-                else:
-                    # Overran the period; reset baseline to avoid tight-loop.
-                    logging.warning(
-                        "GUIBackground: frame overran by %.1f ms; resetting baseline",
-                        -dt * 1000.0,
-                    )
-                    next_t = time.monotonic()
+            finally:
+                self._clients.discard(ws)
+
+        def _pump() -> None:
+            if self.should_stop():
+                loop.stop()
+                return
+            try:
+                jpeg, status = self._snapshot()
+                loop.create_task(self._broadcast(jpeg, status))
+            except Exception:
+                logging.exception("GUIBackground: snapshot/broadcast raised; continuing")
+            sched["n"] += 1
+            if hb and sched["n"] % hb == 0:
+                logging.info(
+                    "GUIBackground: heartbeat frame=%d clients=%d state=%s",
+                    sched["n"], len(self._clients), self._task_srv.state.value,
+                )
+            sched["next"] += period
+            if sched["next"] - loop.time() < 0:
+                logging.warning("GUIBackground: frame overran period; resetting baseline")
+                sched["next"] = loop.time()
+            loop.call_at(sched["next"], _pump)
+
+        logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
+        server = None
+        try:
+            server = loop.run_until_complete(
+                websockets.serve(_handler, self.config.ws_host, self.config.ws_port)
+            )
+            loop.call_soon(_pump)
+            loop.run_forever()
         finally:
-            # TODO(REQ-41) [TASK-47]: close encoder + socket here. Must
-            #     execute on both stop-event-during-sleep AND natural
-            #     loop exit — that's why it's in finally, not after the
-            #     while.
+            if server is not None:
+                server.close()
+                loop.run_until_complete(server.wait_closed())
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
             logging.info("GUIBackground: stream loop exited (cleanup done)")
 
+    # ------------------------------------------------------------------
+    def _snapshot(self) -> Tuple[Optional[bytes], dict]:
+        """Poll the four providers into (jpeg_bytes | None, status_dict)."""
+        jpeg = _jpeg_bytes(getattr(getattr(self._unitree_g1, "color", None), "value", None))
+        st = self._task_srv
+        sub = st.active_sub_task
+        status = {
+            "scenario": st.active_scenario_name,
+            "subtask": (
+                {"name": sub.name, "i": st.active_sub_task_index, "n": st.active_sub_task_total}
+                if sub is not None else None
+            ),
+            "state": st.state.value,
+            "estop": bool(getattr(getattr(self._unitree_g1, "estop", None), "value", False)),
+            "stt": _enum_str(getattr(self._stt, "state", None)),
+            "tts": bool(getattr(self._tts, "is_synthesizing", False)),
+        }
+        return jpeg, status
+
+    async def _broadcast(self, jpeg: Optional[bytes], status: dict) -> None:
+        if not self._clients:
+            return
+        text = json.dumps(status, ensure_ascii=False, default=str)
+        dead = []
+        for ws in list(self._clients):
+            try:
+                await ws.send(text)
+                if jpeg is not None:
+                    await ws.send(jpeg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._clients.discard(ws)
+
     def stop(self) -> None:
-        """Base handles stop_event; encoder/socket teardown in run() after loop exit."""
+        """Base sets stop_event; the pump sees should_stop() and stops the loop."""
         return None
+
+
+# ---------------------------------------------------------------------------
+
+
+def _jpeg_bytes(frame: Any) -> Optional[bytes]:
+    """Extract JPEG bytes from a CompressedImage-like / bytes / None frame value."""
+    if frame is None:
+        return None
+    if isinstance(frame, (bytes, bytearray)):
+        return bytes(frame)
+    data = getattr(frame, "data", None)   # sensor_msgs/CompressedImage.data
+    return bytes(data) if data is not None else None
+
+
+def _enum_str(value: Any) -> Optional[str]:
+    """Stringify an enum-ish value (``.value``) or pass through str/None."""
+    if value is None:
+        return None
+    return value.value if hasattr(value, "value") else str(value)
