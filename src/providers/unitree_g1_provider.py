@@ -242,7 +242,7 @@ class UnitreeG1Provider:
         logging.info(
             "UnitreeG1Provider: initialized "
             "(domain=%d, host=%s, sensor_ttl=%dms, state_ttl=%dms)",
-            ros_domain_id, comm_bridge_host, sensor_ttl_ms, state_ttl_ms,
+            self._ros_domain_id, comm_bridge_host, sensor_ttl_ms, state_ttl_ms,
         )
 
     # ------------------------------------------------------------------
