@@ -149,7 +149,7 @@ class UnitreeG1Provider:
 
     def __init__(
         self,
-        ros_domain_id: int = 0,
+        ros_domain_id: Optional[int] = None,
         cyclonedds_uri: Optional[str] = None,
         comm_bridge_host: Optional[str] = None,
         heartbeat_timeout_ms: int = 500,
@@ -160,8 +160,9 @@ class UnitreeG1Provider:
         """
         Parameters
         ----------
-        ros_domain_id : int
+        ros_domain_id : int, optional
             ROS_DOMAIN_ID shared with the G1 onboard via comm_bridge.
+            Defaults to ``ROS_DOMAIN_ID`` env var, or 0 if unset.
         cyclonedds_uri : str, optional
             File URI to ``cyclonedds.xml`` (partition filter). When None,
             start() should read ``CYCLONEDDS_URI`` env var, then fall back
@@ -182,7 +183,7 @@ class UnitreeG1Provider:
             allow concurrent callback execution across topics — important for
             estop latency not being blocked by slow sensor callbacks (e.g. audio_pcm).
         """
-        self._ros_domain_id = ros_domain_id
+        self._ros_domain_id = ros_domain_id if ros_domain_id is not None else int(os.environ.get("ROS_DOMAIN_ID", "0"))
         self._cyclonedds_uri = cyclonedds_uri
         self._comm_bridge_host = comm_bridge_host
         self._heartbeat_timeout_ms = heartbeat_timeout_ms

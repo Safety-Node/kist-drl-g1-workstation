@@ -288,9 +288,7 @@ def main() -> None:
     print(f"\n{INFO} Initializing UnitreeG1Provider …")
     from providers.unitree_g1_provider import UnitreeG1Provider
     UnitreeG1Provider.reset()
-    domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
     provider = UnitreeG1Provider(
-        ros_domain_id=domain_id,
         heartbeat_timeout_ms=2000,
         sensor_ttl_ms=500,
         state_ttl_ms=2000,
