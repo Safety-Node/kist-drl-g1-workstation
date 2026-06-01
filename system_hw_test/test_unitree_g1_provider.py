@@ -168,7 +168,7 @@ def test_comm_bridge_alive(provider) -> bool:
 
     if not expected_alive:
         print(f"\n  {SKIP} No Reliable topics received — "
-              "NX側 comm_bridge가 Reliable 토픽을 발행하지 않으면 comm_bridge_alive()=False는 정상.")
+              "NX 측 comm_bridge가 Reliable 토픽을 발행하지 않으면 comm_bridge_alive()=False는 정상.")
 
     return ok
 
