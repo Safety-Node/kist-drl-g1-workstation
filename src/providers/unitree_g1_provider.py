@@ -376,16 +376,21 @@ class UnitreeG1Provider:
                 return
             self._connected = False
 
+        # 1. executor에 종료 신호 → spin thread가 루프 탈출
         if self._executor is not None:
-            self._executor.shutdown(timeout_sec=2.0)
-            self._executor = None
+            self._executor.shutdown(timeout_sec=0.0)
 
+        # 2. spin thread 완전 종료 대기 (executor 멈춘 뒤)
         if self._spin_thread is not None:
             self._spin_thread.join(timeout=3.0)
             if self._spin_thread.is_alive():
                 logging.warning("UnitreeG1Provider: spin thread did not stop within 3s")
             self._spin_thread = None
 
+        # 3. executor 리소스 해제
+        self._executor = None
+
+        # 4. node destroy (spin thread가 완전히 끝난 뒤)
         if self._node is not None:
             self._node.destroy_node()
             self._node = None
