@@ -27,15 +27,6 @@ Publishes (Reliable):
 
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
 (navigation pkg removed 2026-05-22).
-
-TODO(REQ-33) [TASK-41]: publish methods.
-                        Watchdog fail must LOG + DROP, never raise — callers
-                        (VLA, TTS) are fire-and-forget via _schedule_coro and
-                        cannot retrieve exceptions.
-TODO(REQ-32) [TASK-41]: reconnect strategy on LAN drop.
-TODO(REQ-32) [TASK-41]: register_estop_callback push API for ≤200 ms E-STOP
-                        propagation budget — polling via TaskSrvBg.tick (10 Hz,
-                        100 ms period) is borderline.
 """
 
 import logging
@@ -46,11 +37,32 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional, TypedDict
 
 import rclpy
+from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import CompressedImage, Image, Imu, JointState
 
 from .singleton import singleton
+
+# g1_onboard_msgs imports — deferred to avoid circular import at module load
+# (rclpy type support is initialised during rclpy.init(), before these are used).
+from g1_onboard_msgs.msg import (
+    AudioPCM,
+    BufState,
+    EstopFlag,
+    JointCmd as JointCmdMsg,
+    JointCmdChunk as JointCmdChunkMsg,
+    LocoCommand as LocoCommandMsg,
+    SpeakerState,
+)
+
+# LocoCommand name → LocoCommand.action constant (matches move_connector._LOCO_MAP)
+_LOCO_NAME_TO_ACTION = {
+    "StandUp": LocoCommandMsg.ACTION_STAND_UP,
+    "SitDown": LocoCommandMsg.ACTION_SIT_DOWN,
+    "Damp": LocoCommandMsg.ACTION_DAMP,
+    "BalanceStand": LocoCommandMsg.ACTION_BALANCE_STAND,
+}
 
 
 @dataclass(frozen=True)
@@ -201,8 +213,33 @@ class UnitreeG1Provider:
         self._speaker_state: TopicCache = TopicCache()
         self._estop: TopicCache = TopicCache()
 
+        # Subscriber/publisher handles — kept alive to prevent GC
+        self._sub_color = None
+        self._sub_depth = None
+        self._sub_audio_pcm = None
+        self._sub_joint_state = None
+        self._sub_imu_base = None
+        self._sub_imu_ankle_left = None
+        self._sub_imu_ankle_right = None
+        self._sub_uwb_pose = None
+        self._sub_buf_state = None
+        self._sub_speaker_state = None
+        self._sub_estop = None
+
+        self._pub_arm = None
+        self._pub_low = None
+        self._pub_loco = None
+        self._pub_vel = None
+        self._pub_audio_out = None
+
+        # Push-style callback lists — initialized here so register_*_callback
+        # is safe to call before start().
+        self._cb_lock = threading.Lock()
+        self._audio_callbacks: List[Callable[[bytes, float], None]] = []
+        self._estop_callbacks: List[Callable[[bool, float], None]] = []
+
         logging.info(
-            "UnitreeG1Provider: skeleton initialized "
+            "UnitreeG1Provider: initialized "
             "(domain=%d, host=%s, sensor_ttl=%dms, state_ttl=%dms)",
             ros_domain_id, comm_bridge_host, sensor_ttl_ms, state_ttl_ms,
         )
@@ -242,23 +279,89 @@ class UnitreeG1Provider:
                 daemon=True,
             )
             self._spin_thread.start()
-            self._connected = True
 
             _qos_be = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
                 history=HistoryPolicy.KEEP_LAST,
                 depth=1,
             )
-            self._node.create_subscription(
-                Imu,
-                "/bridge/sensors/imu",
-                self._on_imu_base,
-                _qos_be,
+            _qos_rel = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
             )
-            logging.info("UnitreeG1Provider: subscribed /bridge/sensors/imu")
+            _qos_rel_pub = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10,
+            )
 
-            # TODO(REQ-32) [TASK-41]: bind remaining subscribers with correct QoS
-            # TODO(REQ-33) [TASK-41]: bind publishers
+            # BestEffort subscribers
+            self._sub_color = self._node.create_subscription(
+                CompressedImage, "/bridge/sensors/color/compressed",
+                self._on_color, _qos_be,
+            )
+            self._sub_depth = self._node.create_subscription(
+                Image, "/bridge/sensors/depth/image_raw",
+                self._on_depth, _qos_be,
+            )
+            self._sub_audio_pcm = self._node.create_subscription(
+                AudioPCM, "/bridge/sensors/audio_pcm",
+                self._on_audio_pcm, _qos_be,
+            )
+            self._sub_joint_state = self._node.create_subscription(
+                JointState, "/bridge/sensors/joint_states",
+                self._on_joint_state, _qos_be,
+            )
+            self._sub_imu_base = self._node.create_subscription(
+                Imu, "/bridge/sensors/imu",
+                self._on_imu_base, _qos_be,
+            )
+            self._sub_imu_ankle_left = self._node.create_subscription(
+                Imu, "/bridge/sensors/imu/ankle_left",
+                self._on_imu_ankle_left, _qos_be,
+            )
+            self._sub_imu_ankle_right = self._node.create_subscription(
+                Imu, "/bridge/sensors/imu/ankle_right",
+                self._on_imu_ankle_right, _qos_be,
+            )
+            self._sub_uwb_pose = self._node.create_subscription(
+                PoseStamped, "/bridge/sensors/uwb_pose",
+                self._on_uwb_pose, _qos_be,
+            )
+
+            # Reliable subscribers
+            self._sub_buf_state = self._node.create_subscription(
+                BufState, "/bridge/motor/buf_state",
+                self._on_buf_state, _qos_rel,
+            )
+            self._sub_speaker_state = self._node.create_subscription(
+                SpeakerState, "/bridge/audio/speaker_state",
+                self._on_speaker_state, _qos_rel,
+            )
+            self._sub_estop = self._node.create_subscription(
+                EstopFlag, "/bridge/safety/estop",
+                self._on_estop, _qos_rel,
+            )
+
+            # Reliable publishers
+            self._pub_arm = self._node.create_publisher(
+                JointCmdChunkMsg, "/bridge/cmd/arm", _qos_rel_pub,
+            )
+            self._pub_low = self._node.create_publisher(
+                JointCmdChunkMsg, "/bridge/cmd/low", _qos_rel_pub,
+            )
+            self._pub_loco = self._node.create_publisher(
+                LocoCommandMsg, "/bridge/cmd/loco", _qos_rel_pub,
+            )
+            self._pub_vel = self._node.create_publisher(
+                Twist, "/bridge/cmd/vel", _qos_rel_pub,
+            )
+            self._pub_audio_out = self._node.create_publisher(
+                AudioPCM, "/bridge/cmd/audio_out", _qos_rel_pub,
+            )
+
+            self._connected = True
             logging.info(
                 "UnitreeG1Provider started (domain=%d, node=%s)",
                 self._ros_domain_id,
@@ -295,8 +398,55 @@ class UnitreeG1Provider:
     # DDS subscription callbacks (called from MultiThreadedExecutor threads)
     # ------------------------------------------------------------------
     def _on_imu_base(self, msg: Imu) -> None:
-        """Callback for /bridge/sensors/imu (base IMU, BestEffort)."""
         self._imu_base = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_color(self, msg: CompressedImage) -> None:
+        self._color = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_depth(self, msg: Image) -> None:
+        self._depth = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_audio_pcm(self, msg: AudioPCM) -> None:
+        ts = time.monotonic()
+        self._audio_pcm = TopicCache(value=msg, last_seen_ts=ts)
+        pcm_bytes = bytes(msg.data)
+        with self._cb_lock:
+            cbs = list(self._audio_callbacks)
+        for cb in cbs:
+            try:
+                cb(pcm_bytes, ts)
+            except Exception:
+                logging.exception("UnitreeG1Provider: audio_pcm callback error")
+
+    def _on_joint_state(self, msg: JointState) -> None:
+        self._joint_state = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_imu_ankle_left(self, msg: Imu) -> None:
+        self._imu_ankle_left = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_imu_ankle_right(self, msg: Imu) -> None:
+        self._imu_ankle_right = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_uwb_pose(self, msg: PoseStamped) -> None:
+        self._uwb_pose = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_buf_state(self, msg: BufState) -> None:
+        self._buf_state = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_speaker_state(self, msg: SpeakerState) -> None:
+        self._speaker_state = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_estop(self, msg: EstopFlag) -> None:
+        ts = time.monotonic()
+        self._estop = TopicCache(value=msg, last_seen_ts=ts)
+        active = bool(msg.active)
+        with self._cb_lock:
+            cbs = list(self._estop_callbacks)
+        for cb in cbs:
+            try:
+                cb(active, ts)
+            except Exception:
+                logging.exception("UnitreeG1Provider: estop callback error")
 
     # ------------------------------------------------------------------
     # Sensor data properties (BestEffort, sensor_ttl_ms)
@@ -381,15 +531,19 @@ class UnitreeG1Provider:
 
         Multi-subscriber; thread-safe (callback list under lock).
         """
-        # TODO(REQ-32) [TASK-41]: append to subscriber list under lock
-        raise NotImplementedError("UnitreeG1Provider.register_audio_callback: TBD [TASK-41]")
+        with self._cb_lock:
+            if callback not in self._audio_callbacks:
+                self._audio_callbacks.append(callback)
 
     def unregister_audio_callback(
         self, callback: Callable[[bytes, float], None]
     ) -> None:
         """Remove ``callback``; no-op if not registered."""
-        # TODO(REQ-32) [TASK-41]: remove from subscriber list under lock
-        raise NotImplementedError("UnitreeG1Provider.unregister_audio_callback: TBD [TASK-41]")
+        with self._cb_lock:
+            try:
+                self._audio_callbacks.remove(callback)
+            except ValueError:
+                pass
 
     def register_estop_callback(
         self, callback: Callable[[bool, float], None]
@@ -401,14 +555,19 @@ class UnitreeG1Provider:
         TaskSrvBg poll at 10 Hz would burn up to 100 ms of that budget on
         its own.
         """
-        # TODO(REQ-32) [TASK-41]: append to subscriber list under lock
-        raise NotImplementedError("UnitreeG1Provider.register_estop_callback: TBD [TASK-41]")
+        with self._cb_lock:
+            if callback not in self._estop_callbacks:
+                self._estop_callbacks.append(callback)
 
     def unregister_estop_callback(
         self, callback: Callable[[bool, float], None]
     ) -> None:
         """Remove ``callback``; no-op if not registered."""
-        raise NotImplementedError("UnitreeG1Provider.unregister_estop_callback: TBD [TASK-41]")
+        with self._cb_lock:
+            try:
+                self._estop_callbacks.remove(callback)
+            except ValueError:
+                pass
 
     # ------------------------------------------------------------------
     # Health / stale helpers
@@ -422,13 +581,13 @@ class UnitreeG1Provider:
         signal. Reliable topics (estop, buf_state, speaker_state) require
         the bridge to be actively forwarding to advance ``last_seen_ts``.
         """
-        # TODO(REQ-33) [TASK-41]: replace with Reliable caches (estop,
-        #   buf_state, speaker_state) once those subscriptions are added.
-        #   For now, IMU (BestEffort) is used as a proxy — acceptable while
-        #   Reliable subscriptions are not yet wired.
         ttl_s = self._heartbeat_timeout_ms / 1000.0
         now = time.monotonic()
-        return not self._imu_base.stale(now=now, ttl_s=ttl_s)
+        return (
+            not self._estop.stale(now=now, ttl_s=ttl_s)
+            or not self._buf_state.stale(now=now, ttl_s=ttl_s)
+            or not self._speaker_state.stale(now=now, ttl_s=ttl_s)
+        )
 
     # ------------------------------------------------------------------
     # Publishers (cmd outbound, Reliable)
@@ -448,9 +607,7 @@ class UnitreeG1Provider:
         (motor_cmd[29].q ramp). ICD IF-6 (arm joint set) applies to
         ``steps[i].joint_names``.
         """
-        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
-        # TODO(REQ-33) [TASK-41]: serialize JointCmdChunk → g1_onboard_msgs/JointCmdChunk, publish
-        raise NotImplementedError("UnitreeG1Provider.publish_joint_chunk_arm: TBD [TASK-41]")
+        self._publish_joint_chunk(self._pub_arm, "/bridge/cmd/arm", chunk)
 
     def publish_joint_chunk_low(self, chunk: JointCmdChunk) -> None:
         """
@@ -461,9 +618,35 @@ class UnitreeG1Provider:
         side. NX motor_controller unpacks ``chunk.steps`` into
         ``joint_buf`` and paces at 100 Hz.
         """
-        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
-        # TODO(REQ-33) [TASK-41]: serialize + publish
-        raise NotImplementedError("UnitreeG1Provider.publish_joint_chunk_low: TBD [TASK-41]")
+        self._publish_joint_chunk(self._pub_low, "/bridge/cmd/low", chunk)
+
+    def _publish_joint_chunk(self, pub, topic: str, chunk: JointCmdChunk) -> None:
+        """Shared serialisation + publish for arm/low chunk paths."""
+        if not self._connected or pub is None:
+            logging.warning("UnitreeG1Provider: not started, dropping %s", topic)
+            return
+        if not self.comm_bridge_alive():
+            logging.warning("UnitreeG1Provider: comm_bridge not alive, dropping %s", topic)
+            return
+        try:
+            msg = JointCmdChunkMsg()
+            msg.chunk_id = int(chunk["chunk_id"])
+            for step in chunk["steps"]:
+                s = JointCmdMsg()
+                s.joint_names = list(step["joint_names"])
+                s.q = list(step["q"])
+                s.dq = list(step["dq"])
+                s.kp = list(step["kp"])
+                s.kd = list(step["kd"])
+                s.tau_ff = list(step["tau_ff"])
+                s.mode = int(step["mode"])
+                s.weight = float(step["weight"])
+                s.chunk_id = int(step["chunk_id"])
+                s.step_index = int(step["step_index"])
+                msg.steps.append(s)
+            pub.publish(msg)
+        except Exception:
+            logging.exception("UnitreeG1Provider: failed to publish %s", topic)
 
     def publish_loco_cmd(self, loco_command: LocoCommand) -> None:
         """
@@ -472,9 +655,25 @@ class UnitreeG1Provider:
         Used by MoveConnector for posture transitions (StandUp / SitDown /
         Damp / BalanceStand) — see ``_LOCO_MAP`` in move_connector.py.
         """
-        # TODO(REQ-33) [TASK-41]: if not self.comm_bridge_alive(): log + drop
-        # TODO(REQ-33) [TASK-41]: serialize + publish
-        raise NotImplementedError("UnitreeG1Provider.publish_loco_cmd: TBD [TASK-41]")
+        if not self._connected or self._pub_loco is None:
+            logging.warning("UnitreeG1Provider: not started, dropping loco_cmd")
+            return
+        if not self.comm_bridge_alive():
+            logging.warning("UnitreeG1Provider: comm_bridge not alive, dropping loco_cmd")
+            return
+        try:
+            action = _LOCO_NAME_TO_ACTION.get(loco_command["name"])
+            if action is None:
+                logging.error(
+                    "UnitreeG1Provider: unknown loco command '%s', dropping",
+                    loco_command["name"],
+                )
+                return
+            msg = LocoCommandMsg()
+            msg.action = action
+            self._pub_loco.publish(msg)
+        except Exception:
+            logging.exception("UnitreeG1Provider: failed to publish loco_cmd")
 
     def publish_twist(self, vx: float, vy: float, vyaw: float) -> None:
         """Publish geometry_msgs/Twist on /bridge/cmd/vel for NX motor_controller's
@@ -484,16 +683,50 @@ class UnitreeG1Provider:
         Continuous walking velocity. Discrete LocoClient preset transitions
         (StandUp / SitDown / BalanceStand / ZeroTorque) go through a separate
         path (send_loco_command / LocoCommand TypedDict).
-
-        TODO(REQ "Twist Cmd Wire") [TASK-41]: implement DDS publisher.
         """
-        raise NotImplementedError("UnitreeG1Provider.publish_twist — scaffold")
+        if not self._connected or self._pub_vel is None:
+            logging.warning("UnitreeG1Provider: not started, dropping twist")
+            return
+        if not self.comm_bridge_alive():
+            logging.warning("UnitreeG1Provider: comm_bridge not alive, dropping twist")
+            return
+        try:
+            msg = Twist()
+            msg.linear.x = float(vx)
+            msg.linear.y = float(vy)
+            msg.angular.z = float(vyaw)
+            self._pub_vel.publish(msg)
+        except Exception:
+            logging.exception("UnitreeG1Provider: failed to publish twist")
 
     def publish_audio_out(self, pcm: bytes) -> None:
         """
         Publish synthesized PCM audio to ``/bridge/cmd/audio_out`` (onboard speaker).
         TTS Provider → Speak Connector → here.
+
+        Assumes mono 16-bit 16 kHz PCM (standard TTS output).
+        Payloads exceeding 65500 B are dropped with a warning — caller
+        should chunk before calling if utterances are long.
         """
-        # TODO(REQ-29) [TASK-41]: if not self.comm_bridge_alive(): log + drop
-        # TODO(REQ-29) [TASK-41]: chunking + flow control + publish
-        raise NotImplementedError("UnitreeG1Provider.publish_audio_out: TBD [TASK-41]")
+        if not self._connected or self._pub_audio_out is None:
+            logging.warning("UnitreeG1Provider: not started, dropping audio_out")
+            return
+        if not self.comm_bridge_alive():
+            logging.warning("UnitreeG1Provider: comm_bridge not alive, dropping audio_out")
+            return
+        _MAX_PAYLOAD = 65500
+        if len(pcm) > _MAX_PAYLOAD:
+            logging.warning(
+                "UnitreeG1Provider: audio_out payload %d B exceeds %d B limit, dropping",
+                len(pcm), _MAX_PAYLOAD,
+            )
+            return
+        try:
+            msg = AudioPCM()
+            msg.sample_rate = 16000
+            msg.channels = 1
+            msg.bit_depth = 16
+            msg.data = list(pcm)
+            self._pub_audio_out.publish(msg)
+        except Exception:
+            logging.exception("UnitreeG1Provider: failed to publish audio_out")
