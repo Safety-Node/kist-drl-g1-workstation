@@ -12,11 +12,10 @@ Per frame tick, every connected client receives two messages:
 Status JSON:
   { "scenario": str|null,
     "subtask": { "name": str, "i": int, "n": int } | null,
-    "state": "idle|active|success|failed",
-    "estop": bool|null }          # null = unknown (sensor not yet wired)
+    "state": "idle|active|success|failed" }
 
 Polled (CONV-010/011, no IOProvider):
-  UnitreeG1Provider.color.value (JPEG) / .estop.value
+  UnitreeG1Provider.color.value (JPEG)
   TaskSrvProvider.state / .active_scenario_name / .active_sub_task(.name)
                  / .active_sub_task_index / .active_sub_task_total
 
@@ -146,7 +145,6 @@ class GUIBackground(Background[GUIBackgroundConfig]):
         jpeg = _jpeg_bytes(self._unitree_g1.color.value)
         st = self._task_srv
         sub = st.active_sub_task
-        estop_val = self._unitree_g1.estop.value
         status = {
             "scenario": st.active_scenario_name,
             "subtask": (
@@ -154,8 +152,6 @@ class GUIBackground(Background[GUIBackgroundConfig]):
                 if sub is not None else None
             ),
             "state": st.state.value,
-            # Fail-safe: unknown (sensor not wired yet) → null, NOT False.
-            "estop": (bool(estop_val) if estop_val is not None else None),
         }
         return jpeg, status
 
