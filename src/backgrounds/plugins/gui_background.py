@@ -1,11 +1,9 @@
 """
 GUI Background [TASK-47, REQ-41]
 
-Display **data publisher** — does NOT composite/render. Polls the four
-providers (CONV-010/011, no IOProvider) and pushes the latest camera frame +
-a status snapshot over a WebSocket; a separate browser renderer (different
-repo) draws the overlay. (2026-05-31: composite-video → data-only WS, see
-REQ-41 change log.)
+Display **data publisher** — does NOT composite/render. Polls the camera frame
+and task status and pushes them over a WebSocket; a separate browser renderer
+(kist-drl-g1-gui) draws the overlay.
 
 Per frame tick, every connected client receives two messages:
   - text (JSON)  : status snapshot (schema below)
@@ -15,30 +13,27 @@ Status JSON:
   { "scenario": str|null,
     "subtask": { "name": str, "i": int, "n": int } | null,
     "state": "idle|active|success|failed",
-    "estop": bool, "stt": str|null, "tts": bool }
+    "estop": bool|null }          # null = unknown (sensor not yet wired)
 
-Polled (CONV-010/011):
+Polled (CONV-010/011, no IOProvider):
   UnitreeG1Provider.color.value (JPEG) / .estop.value
   TaskSrvProvider.state / .active_scenario_name / .active_sub_task(.name)
                  / .active_sub_task_index / .active_sub_task_total
-  STTProvider.state · TTSProvider.is_synthesizing
 
-Transport = WebSocket (`websockets`, already a dep; ROS-free renderer).
-Latency budget ≤ 200 ms. Overlay compositing + recording are the renderer's
-job now (out of scope here).
+Transport = WebSocket (`websockets`; ROS-free renderer). Latency budget ≤ 200 ms.
+Backpressure: at most one in-flight broadcast — if the previous hasn't finished,
+the new frame is dropped (latest-wins); slow clients are dropped on send timeout.
 """
 
 import asyncio
 import json
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Set, Tuple
 
 from pydantic import Field
 
 from backgrounds.base import Background, BackgroundConfig
-from providers.stt_provider import STTProvider
 from providers.task_srv_provider import TaskSrvProvider
-from providers.tts_provider import TTSProvider
 from providers.unitree_g1_provider import UnitreeG1Provider
 
 
@@ -48,6 +43,11 @@ class GUIBackgroundConfig(BackgroundConfig):
     fps: float = Field(default=15.0, gt=0, description="Snapshot publish rate (Hz).")
     ws_host: str = Field(default="0.0.0.0", description="WebSocket bind host.")
     ws_port: int = Field(default=8081, description="WebSocket bind port.")
+    send_timeout_s: float = Field(
+        default=1.0,
+        gt=0,
+        description="Per-message send timeout; a client slower than this is dropped.",
+    )
     heartbeat_every_frames: int = Field(
         default=75,                          # 5 s at 15 fps
         ge=0,
@@ -56,16 +56,15 @@ class GUIBackgroundConfig(BackgroundConfig):
 
 
 class GUIBackground(Background[GUIBackgroundConfig]):
-    """Polls providers and broadcasts (frame + status) to WebSocket clients."""
+    """Polls camera + task status and broadcasts (frame + status) to WS clients."""
 
     def __init__(self, config: GUIBackgroundConfig):
         super().__init__(config)
-        # CONV-010: providers fetched directly (no IOProvider). run.py builds all four first.
+        # CONV-010: providers fetched directly (no IOProvider). run.py builds them first.
         self._unitree_g1 = UnitreeG1Provider()
         self._task_srv = TaskSrvProvider()
-        self._stt = STTProvider()
-        self._tts = TTSProvider()
-        self._clients: set = set()
+        self._clients: Set[Any] = set()
+        self._broadcast_task: Optional[asyncio.Task] = None
         logging.info(
             "GUIBackground: initialized (fps=%.1f, ws=%s:%d)",
             config.fps, config.ws_host, config.ws_port,
@@ -98,20 +97,24 @@ class GUIBackground(Background[GUIBackgroundConfig]):
                 return
             try:
                 jpeg, status = self._snapshot()
-                loop.create_task(self._broadcast(jpeg, status))
+                # Backpressure: only one broadcast in flight — else drop this frame.
+                if self._broadcast_task is None or self._broadcast_task.done():
+                    self._broadcast_task = loop.create_task(self._broadcast(jpeg, status))
+                sched["n"] += 1
+                if hb and sched["n"] % hb == 0:
+                    logging.info(
+                        "GUIBackground: heartbeat frame=%d clients=%d state=%s",
+                        sched["n"], len(self._clients), status.get("state"),
+                    )
             except Exception:
-                logging.exception("GUIBackground: snapshot/broadcast raised; continuing")
-            sched["n"] += 1
-            if hb and sched["n"] % hb == 0:
-                logging.info(
-                    "GUIBackground: heartbeat frame=%d clients=%d state=%s",
-                    sched["n"], len(self._clients), self._task_srv.state.value,
-                )
-            sched["next"] += period
-            if sched["next"] - loop.time() < 0:
-                logging.warning("GUIBackground: frame overran period; resetting baseline")
-                sched["next"] = loop.time()
-            loop.call_at(sched["next"], _pump)
+                logging.exception("GUIBackground: pump tick raised; continuing")
+            finally:
+                # Reschedule unconditionally so a transient error never freezes the stream.
+                sched["next"] += period
+                if sched["next"] - loop.time() < 0:
+                    logging.warning("GUIBackground: frame overran period; resetting baseline")
+                    sched["next"] = loop.time()
+                loop.call_at(sched["next"], _pump)
 
         logging.info("GUIBackground: stream loop entering (period=%.3fs)", period)
         server = None
@@ -135,10 +138,15 @@ class GUIBackground(Background[GUIBackgroundConfig]):
 
     # ------------------------------------------------------------------
     def _snapshot(self) -> Tuple[Optional[bytes], dict]:
-        """Poll the four providers into (jpeg_bytes | None, status_dict)."""
-        jpeg = _jpeg_bytes(getattr(getattr(self._unitree_g1, "color", None), "value", None))
+        """Poll camera + task status into (jpeg_bytes | None, status_dict).
+
+        Direct access (CONV-010 guarantees the providers are constructed before
+        this background). Any surprise is contained by the pump's try/finally.
+        """
+        jpeg = _jpeg_bytes(self._unitree_g1.color.value)
         st = self._task_srv
         sub = st.active_sub_task
+        estop_val = self._unitree_g1.estop.value
         status = {
             "scenario": st.active_scenario_name,
             "subtask": (
@@ -146,26 +154,30 @@ class GUIBackground(Background[GUIBackgroundConfig]):
                 if sub is not None else None
             ),
             "state": st.state.value,
-            "estop": bool(getattr(getattr(self._unitree_g1, "estop", None), "value", False)),
-            "stt": _enum_str(getattr(self._stt, "state", None)),
-            "tts": bool(getattr(self._tts, "is_synthesizing", False)),
+            # Fail-safe: unknown (sensor not wired yet) → null, NOT False.
+            "estop": (bool(estop_val) if estop_val is not None else None),
         }
         return jpeg, status
 
     async def _broadcast(self, jpeg: Optional[bytes], status: dict) -> None:
+        """Send status (text) then frame (binary) to each client. One broadcast
+        runs at a time (pump guard), so the text/binary pair never interleaves.
+        A client slower than send_timeout_s is dropped."""
         if not self._clients:
             return
         text = json.dumps(status, ensure_ascii=False, default=str)
-        dead = []
+        timeout = self.config.send_timeout_s
         for ws in list(self._clients):
             try:
-                await ws.send(text)
+                await asyncio.wait_for(ws.send(text), timeout)
                 if jpeg is not None:
-                    await ws.send(jpeg)
+                    await asyncio.wait_for(ws.send(jpeg), timeout)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._clients.discard(ws)
+                self._clients.discard(ws)
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
     def stop(self) -> None:
         """Base sets stop_event; the pump sees should_stop() and stops the loop."""
@@ -183,10 +195,3 @@ def _jpeg_bytes(frame: Any) -> Optional[bytes]:
         return bytes(frame)
     data = getattr(frame, "data", None)   # sensor_msgs/CompressedImage.data
     return bytes(data) if data is not None else None
-
-
-def _enum_str(value: Any) -> Optional[str]:
-    """Stringify an enum-ish value (``.value``) or pass through str/None."""
-    if value is None:
-        return None
-    return value.value if hasattr(value, "value") else str(value)
