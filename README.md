@@ -109,7 +109,7 @@ PC and NX must share the same DDS domain + `cyclonedds.xml` network interface.
 | Verification | [Tests DB](https://www.notion.so/a67e62ef1cfc4f85be29a340107846b6) |
 
 Each `TODO(REQ-XX) [TASK-XX]` in code links to the matching Notion page.
-Code-level architectural decisions (CONV-001..011) live in [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+Code-level architectural decisions (CONV-001..013) live in the [Notion **CONV** page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e). In-code `CONV-xxx` citations refer to that page (same numbering; Notion is the single source of truth).
 
 ---
 

@@ -107,5 +107,5 @@ description: 언제 이 스킬이 트리거돼야 하는지 한 문장으로 (�
 
 ## 관련 문서
 
-- [CONVENTIONS.md](CONVENTIONS.md) — 코드 컨벤션 (CONV-001..007)
+- [Notion CONV 페이지](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e) — 코드 컨벤션 (CONV-001..013, Notion 단일 출처)
 - [README.md](../README.md) — 프로젝트 개요 및 Notion DB 링크

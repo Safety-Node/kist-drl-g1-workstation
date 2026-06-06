@@ -144,7 +144,7 @@ redesigning from scratch when LLM returns.
 ## Related conventions
 
 - **CONV-001** — Provider explicit lifecycle in `run.py`
-  ([docs/CONVENTIONS.md](CONVENTIONS.md))
+  ([Notion CONV page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e))
 - **CONV-004** — Cortex / VLM / Safety Provider deferred → TaskSrvProvider
 - **CONV-008** — Stay close to OM1 shape; document deviations
 
