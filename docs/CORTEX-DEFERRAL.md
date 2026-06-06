@@ -141,10 +141,6 @@ redesigning from scratch when LLM returns.
 3. TaskSrvProvider and LLM Cortex coexist as two modes that the
    operator toggles at startup.
 
-## Related conventions
-
-See the [Notion CONV page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e) for code-level conventions.
-
 ## Related Notion
 
 - [Meta Data → Spec Change Log](https://www.notion.so/Meta-Data-353b39de7dd7801498cce3dbbea06f91) — 2026-05-22 and 2026-05-24 rows
