@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # NOTE: MessageHookHandler (OM1 TTS-based lifecycle message hook) removed
 # 2026-05-24 as part of OM1 cleanup. Re-wire via TTSProvider (Naver Clova)
-# when needed — see CONV-003 / TTS Provider scaffold.
+# when needed — see the TTS Provider scaffold.
 
 
 class LifecycleHookType(Enum):

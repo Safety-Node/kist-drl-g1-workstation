@@ -1,8 +1,8 @@
 """
 Sound Sensor [TASK-46, REQ-44].
 
-Bridges STTProvider transcripts into TaskSrvProvider's keyword router (CONV-004:
-no Cortex prompt block anymore). Not a @singleton — one instance per mode.
+Bridges STTProvider transcripts into TaskSrvProvider's keyword router (no
+Cortex prompt block anymore). Not a @singleton — one instance per mode.
 
 Subclasses OM1 ``FuserInput`` so it slots into ``mode_config.json5: agent_inputs[]``
 without framework changes. ``_poll`` / ``_raw_to_text`` are inert stubs — the
@@ -49,7 +49,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     Not a singleton. ``run.py`` constructs one instance and calls
     ``start()``. ``stop()`` unwires the STT callback.
 
-    Both deps (STTProvider, TaskSrvProvider) are @singletons; per CONV-010
+    Both deps (STTProvider, TaskSrvProvider) are @singletons;
     they are fetched in ``__init__``. ``run.py`` MUST construct both
     Providers before this SoundSensor.
 
@@ -72,7 +72,7 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
         # transcript-history panel later wants N events, add buffer back
         # then (YAGNI for now).
         self._last_event: Optional[TranscriptEvent] = None
-        # CONV-010: deps are @singletons. run.py MUST have constructed
+        # Deps are @singletons. run.py MUST have constructed
         # both Providers before this SoundSensor.
         self._stt = STTProvider()
         self._task_srv = TaskSrvProvider()
@@ -170,13 +170,13 @@ class SoundSensor(FuserInput[SoundSensorConfig, str]):
     async def _poll(self) -> str:
         """Cortex-polling path not used; TaskSrvProvider receives via callback."""
         raise NotImplementedError(
-            "SoundSensor._poll: KIST mode routes via on_transcript callback "
-            "(CONV-004); FuserInput poll path is unused."
+            "SoundSensor._poll: KIST mode routes via on_transcript callback; "
+            "FuserInput poll path is unused."
         )
 
     async def _raw_to_text(self, raw_input: str) -> Message:
-        """Cortex prompt-block formatter not used (CONV-004: no Cortex)."""
+        """Cortex prompt-block formatter not used (no Cortex)."""
         raise NotImplementedError(
-            "SoundSensor._raw_to_text: Cortex prompt block deprecated "
-            "(CONV-004); audio context is pushed to TaskSrvProvider directly."
+            "SoundSensor._raw_to_text: Cortex prompt block deprecated; "
+            "audio context is pushed to TaskSrvProvider directly."
         )

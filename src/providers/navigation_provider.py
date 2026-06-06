@@ -21,7 +21,7 @@ Background:
   (no separate path planner anywhere). 2026-05-26 KIST 회의 reversed that —
   VLA-locomotion 아키텍처 / GearSonic 배치 모두 미확정으로 시연 일정 충족
   불가. Locomotion was peeled back out into this NavigationProvider so VLA
-  scope can shrink to arm/hand manipulation (CONV-005 범위 축소, CONV-012).
+  scope can shrink to arm/hand manipulation (VLA 범위 축소).
 - Velocity is dispatched via the Unitree SDK `loco_client.Move(vx, vy, vyaw)`
   on NX, not via VLA joint chunks. Posture transitions
   (StandUp / SitDown / Damp / BalanceStand) stay on the discrete
@@ -76,7 +76,7 @@ class NavigationProviderConfig:
 @singleton
 class NavigationProvider:
     """
-    PC-side navigation container (REQ "PC NavigationProvider", CONV-012).
+    PC-side navigation container (REQ "PC NavigationProvider").
 
     Consumes Nav sub-task prompts from ``MoveConnector``, runs an internal
     Kalman filter + planner, and emits continuous walking velocity via
@@ -84,8 +84,8 @@ class NavigationProvider:
     ``motor_controller`` translates the published Twist into
     ``LocoClient.Move(vx, vy, vyaw)`` calls.
 
-    Lifecycle (CONV-001): instantiated and ``.start()``-ed by ``run.py``;
-    dependencies are fetched via ``@singleton`` (CONV-010). No ``bind()``
+    Lifecycle: instantiated and ``.start()``-ed by ``run.py``;
+    dependencies are fetched via ``@singleton``. No ``bind()``
     needed — UnitreeG1Provider is the only Provider dep.
 
     Scaffold status: ``start()`` / ``stop()`` / ``submit_nav_subtask()`` all
@@ -96,7 +96,7 @@ class NavigationProvider:
 
     def __init__(self, config: Optional[NavigationProviderConfig] = None):
         self._config = config or NavigationProviderConfig()
-        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # UnitreeG1Provider is @singleton — fetched here.
         self._unitree_g1 = UnitreeG1Provider()
         self._running = False
         logging.info(

@@ -32,7 +32,7 @@ class SpeakConnector(ActionConnector[ActionConfig, SpeakInput]):
 
     def __init__(self, config: ActionConfig):
         super().__init__(config)
-        # CONV-001 ordering: TTSProvider was constructed by run.py before
+        # Ordering: TTSProvider was constructed by run.py before
         # this connector, so the @singleton fetch returns that instance.
         self._tts = TTSProvider()
         logging.info("SpeakConnector: skeleton initialized")

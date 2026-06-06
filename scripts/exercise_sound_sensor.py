@@ -1,5 +1,5 @@
 """
-Exercise SoundSensor — CONV-009 log-based verification.
+Exercise SoundSensor — log-based verification.
 
 Wires SoundSensor with lightweight stubs so the full filter chain
 (confidence / empty / dedupe / stop) runs in-process without needing a

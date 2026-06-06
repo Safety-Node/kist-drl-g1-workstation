@@ -4,14 +4,14 @@ VLA Provider [TASK-40, REQ-31/39/43]
 Vendor-agnostic VLA client. Default backend: NVIDIA GR00T N1.7 (3B) whole-body,
 served by KIST Model Server.
 
-- Whole-body locomotion + manipulation (CONV-005).
-- PC publishes chunks; NX paces 100 Hz (CONV-006 REVISED 2026-05-26 —
+- Whole-body locomotion + manipulation.
+- PC publishes chunks; NX paces 100 Hz (2026-05-26 —
   chunk-as-wire). PC runs at the VLA inference cadence (~15 Hz assumed,
   KIST L40 ~63.9 ms / chunk; RTX 4090 unmeasured; source TBD). Each
   inference produces one `action_horizon`-step chunk (default 16 per
   KIST fine-tune; NVIDIA example default 8 — source TBD) which is split
   arm/low and published as TWO `JointCmdChunk` DDS messages.
-- GearSonic balance-correction lives inside this provider (CONV-007).
+- GearSonic balance-correction lives inside this provider.
   Placement TBD (PC GPU / separate Jetson / NX); external interface stable.
 
 Pipeline ordering (LOCKED for safety):
@@ -26,7 +26,7 @@ TODO(REQ-31) [TASK-40]: chunk publish — split 29-DoF action across arm/low
                         frozensets and emit two JointCmdChunk messages.
                         100 Hz pacing + crossfade + empty-queue handling now
                         live on NX (motor_controller + queue_aggregate),
-                        not here (CONV-006 REVISED).
+                        not here.
 TODO(REQ-43) [TASK-40]: GearSonic stage (spec deferred — KIST 단장님 학생들).
 TODO(REQ-39) [TASK-40]: safety clip (joint_delta_clip_rad) — AFTER GearSonic.
 TODO(REQ-39) [TASK-40]: E-STOP — start() subscribes self._on_estop via
@@ -76,7 +76,7 @@ class VLAConfig:
     # the sub-task (see TODO in module docstring); last-known chunk keeps
     # replaying during the retry window.
     request_timeout_s: float = 1.0
-    # Inference rate (CONV-006 REVISED — canonical wording).
+    # Inference rate (canonical wording).
     # Steps per chunk. Currently 16 per KIST fine-tune choice (NVIDIA's
     # public example default is 8 — source for KIST's 16 is TBD).
     # Drives JointCmdChunk.steps[] length on /bridge/cmd/{arm,low}.
@@ -88,9 +88,9 @@ class VLAConfig:
     # plausible. Setting this value higher does NOT make the model emit
     # faster; informational only, kept so config reviewers see the
     # design assumption (conservative). 100 Hz pacing now lives on NX
-    # motor_controller (CONV-006 REVISED).
+    # motor_controller.
     chunk_emit_rate_hz: float = 15.0
-    # GearSonic balance-correction stage (CONV-007 — spec deferred).
+    # GearSonic balance-correction stage (spec deferred).
     gearsonic_enabled: bool = True           # identity passthrough until wired
     gearsonic_device: Literal["cuda:0", "cuda:1", "cpu"] = "cuda:0"
     # Safety envelope (rejected before leaving the provider). Applied
@@ -111,11 +111,10 @@ class VLAProvider:
     Provider, requests an ``action_horizon``-step action chunk from the
     model server (default 16 per KIST fine-tune; NVIDIA example default
     8, source TBD), passes the chunk through the GearSonic
-    balance-correction stage (CONV-007), splits the chunk's 29-DoF action
+    balance-correction stage, splits the chunk's 29-DoF action
     across arm/low frozensets, and publishes two ``JointCmdChunk`` DDS
     messages via the UnitreeG1 Provider. NX motor_controller paces the
-    100 Hz step pop + crossfade. CONV-006 REVISED is the canonical wording
-    for the wire format and rates.
+    100 Hz step pop + crossfade.
     """
 
     def __init__(self, config: Optional[VLAConfig] = None):
@@ -127,11 +126,11 @@ class VLAProvider:
             ``action_horizon=16`` (KIST config; NVIDIA example default
             is 8 — source TBD), assumed ~15 Hz chunk emission
             (KIST L40 ~63.9 ms / chunk, RTX 4090 unmeasured — TBD).
-            GearSonic enabled. See CONV-006 REVISED.
+            GearSonic enabled.
         """
         self._config = config or VLAConfig()
         self._running = False
-        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # UnitreeG1Provider is @singleton — fetched here.
         # run.py MUST construct UnitreeG1 before VLAProvider so this
         # returns the configured instance, not a default-config singleton.
         self._unitree_g1 = UnitreeG1Provider()
@@ -157,7 +156,7 @@ class VLAProvider:
         """Connect to the KIST Model Server + subscribe E-STOP.
 
         No 100 Hz worker thread here anymore — NX motor_controller paces
-        the wire output (CONV-006 REVISED). ``infer()`` is the only path
+        the wire output. ``infer()`` is the only path
         that emits chunks, called from the asyncio runtime as VLA
         inferences complete (~15 Hz).
         """
@@ -196,7 +195,7 @@ class VLAProvider:
         int
             ``chunk_id`` assigned to the resulting chunk. The chunk
             contains ``self._config.action_horizon`` steps (currently
-            16 per KIST config — see CONV-006 REVISED; NVIDIA example
+            16 per KIST config; NVIDIA example
             default is 8, source TBD). Per-step ``step_index`` on
             ``JointCmd`` is retained for trace/log; NX
             ``motor_controller`` paces the steps at 100 Hz.
@@ -234,7 +233,7 @@ class VLAProvider:
         Mid-chunk preemption on the wire is handled by NX
         ``motor_controller``: when a new chunk arrives with a different
         ``chunk_id``, NX drops the remaining tail of the previous chunk
-        and crossfades into the new one (CONV-006 REVISED).
+        and crossfades into the new one.
         """
         # TODO(REQ-31) [TASK-40]: gate future infer() (set internal flag)
         # TODO(REQ-31) [TASK-40]: if reason == "estop":
@@ -261,13 +260,13 @@ class VLAProvider:
         raise NotImplementedError("VLAProvider._on_estop: TBD [TASK-40]")
 
     # ------------------------------------------------------------------
-    # Internals — GearSonic seam (CONV-007)
+    # Internals — GearSonic seam
     # ------------------------------------------------------------------
     def _gearsonic_correct(self, chunk: Any) -> Any:
         """
         Post-VLA balance correction (GearSonic stage).
 
-        Spec deferred — see CONV-007 + REQ-43 (KIST 단장님 학생들 담당).
+        Spec deferred — see REQ-43 (KIST 단장님 학생들 담당).
         For now this is the seam where the model hooks in; default
         behaviour is identity passthrough so the rest of the pipeline
         can be built and tested.
@@ -286,7 +285,7 @@ class VLAProvider:
         return chunk  # identity passthrough placeholder
 
     # ------------------------------------------------------------------
-    # Internals — chunk publish (CONV-006 REVISED canonical)
+    # Internals — chunk publish (canonical)
     #
     # Chunk-handling policy split between PC and NX (LOCKED for the demo):
     #   1. Empty queue (underflow) → NX motor_controller republishes the
@@ -305,8 +304,8 @@ class VLAProvider:
     # ------------------------------------------------------------------
     def _publish_chunk(self, chunk: Any, chunk_id: int) -> None:
         """
-        Split a 29-DoF ``action_horizon``-step chunk (currently 16 per
-        CONV-006 REVISED) into arm + low halves and publish each as a
+        Split a 29-DoF ``action_horizon``-step chunk (currently 16)
+        into arm + low halves and publish each as a
         single ``JointCmdChunk`` DDS message.
 
         Both messages carry the same ``chunk_id``; NX motor_controller

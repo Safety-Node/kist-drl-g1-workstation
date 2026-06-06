@@ -26,7 +26,7 @@ executes today.
 | Action selection | LLM picks from `agent_actions[]` | `TaskSrvProvider` runs scripted scenarios |
 | Scenario trigger | LLM intent inference | STT keyword substring match |
 | Success judgement | LLM implicit | `SuccessCriterion.evaluate(state)` explicit (UWB pose / joint state) |
-| Provider lifecycle | Lazy init via `mode_config` consumers | Explicit `.start()` in `run.py` (CONV-001) |
+| Provider lifecycle | Lazy init via `mode_config` consumers | Explicit `.start()` in `run.py` |
 | Mode transitions | `ModeManager` + transition rules | Single mode (`sous_chef_g1`) — no transitions |
 
 ## Why (KIST 2026-05-22 mail + Meta Data 2026-05-24)
@@ -78,7 +78,7 @@ KAPEX speaks: "오이 가져와 부탁해요"
   → UnitreeG1.publish_joint_chunk_arm + publish_joint_chunk_low
                               → JointCmdChunk on /bridge/cmd/{arm,low}
                               → NX motor_controller paces 100 Hz +
-                                queue_aggregate.crossfade() (CONV-006 REVISED)
+                                queue_aggregate.crossfade()
   → NX safety_monitor → motor_controller → G1 motors
 ```
 
@@ -102,11 +102,11 @@ OM1 `ModeCortexRuntime._run_cortex_loop` is **never called**.
 - `hertz`, `name`, `system_prompt_base`
 - `agent_inputs[]`, `cortex_llm`, `agent_actions[]`, `backgrounds[]`
 
-Plus one KIST-only extension: `providers: {...}` (CONV-001 explicit
+Plus one KIST-only extension: `providers: {...}` (explicit
 lifecycle — OM1 does lazy init in input/action/background ctors, we
 instantiate in `run.py` instead).
 
-`cortex_llm: null` is set explicitly (CONV-008: prefer null over
+`cortex_llm: null` is set explicitly (prefer null over
 omission so reviewers see exactly which slot the LLM goes into when
 it returns).
 
@@ -143,10 +143,7 @@ redesigning from scratch when LLM returns.
 
 ## Related conventions
 
-- **CONV-001** — Provider explicit lifecycle in `run.py`
-  ([docs/CONVENTIONS.md](CONVENTIONS.md))
-- **CONV-004** — Cortex / VLM / Safety Provider deferred → TaskSrvProvider
-- **CONV-008** — Stay close to OM1 shape; document deviations
+See the [Notion CONV page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e) for code-level conventions.
 
 ## Related Notion
 

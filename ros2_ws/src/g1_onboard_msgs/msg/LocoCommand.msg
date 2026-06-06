@@ -1,6 +1,6 @@
 # LocoCommand — discrete G1 LocoClient action (anything other than continuous Move).
 #
-# Discrete LocoClient FSM transitions (StandUp / SitDown / BalanceStand / ZeroTorque). Continuous walking velocity is published separately as geometry_msgs/Twist on /onboard/cmd/vel by PC NavigationProvider (CONV-007 REVISED 2026-05-26).
+# Discrete LocoClient FSM transitions (StandUp / SitDown / BalanceStand / ZeroTorque). Continuous walking velocity is published separately as geometry_msgs/Twist on /onboard/cmd/vel by PC NavigationProvider (2026-05-26).
 # This message is for one-shot LocoClient API calls that change the FSM.
 # motor_controller subscribes /onboard/cmd/loco and translates each value into
 # the matching unitree_sdk2_python LocoClient method call (bypasses queue).

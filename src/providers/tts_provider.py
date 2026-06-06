@@ -94,7 +94,7 @@ class TTSProvider:
         """
         self._config = config or TTSConfig()
         self._running = False
-        # CONV-010: UnitreeG1Provider is @singleton — fetched here.
+        # UnitreeG1Provider is @singleton — fetched here.
         # run.py MUST construct UnitreeG1 before TTSProvider so this
         # returns the configured instance, not a default-config singleton.
         self._unitree_g1 = UnitreeG1Provider()
@@ -267,7 +267,7 @@ class TTSProvider:
         """POST ``text`` to Clova /tts; return raw WAV bytes (or None on failure).
 
         Isolated so exercise scripts can monkeypatch the network call and
-        verify the decode/resample/publish path offline (CONV-009).
+        verify the decode/resample/publish path offline.
         """
         import aiohttp
 

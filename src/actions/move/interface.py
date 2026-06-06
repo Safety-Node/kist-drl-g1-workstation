@@ -13,11 +13,11 @@ class MoveInput:
     action : str
         Free-form natural-language sub-task prompt (Korean / English),
         e.g. ``"Walk to the refrigerator and face the door."``.
-        Whole-body VLA (CONV-005) has no finite action vocabulary — the
+        Whole-body VLA has no finite action vocabulary — the
         MoveConnector forwards the string to the VLA Provider as-is.
         (Replaces OM1's MovementAction enum, which encoded the old
         Unitree-dog template — STAND_STILL / SIT / DANCE / ...; gone
-        since CONV-005.)
+        with the VLA scope change.)
     """
 
     action: str

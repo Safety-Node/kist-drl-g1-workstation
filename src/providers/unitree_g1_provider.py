@@ -3,7 +3,7 @@ UnitreeG1 Provider [TASK-41, REQ-32/33]
 
 PC-side facade for ``/bridge/*`` DDS topics. Single owner of subscribers +
 publishers; downstream providers poll the data properties.
-rclpy + CycloneDDS direct (CONV-002 — no Zenoh bridge daemon).
+rclpy + CycloneDDS direct (no Zenoh bridge daemon).
 
 Subscribes (BestEffort unless noted):
   /bridge/sensors/color/compressed   sensor_msgs/CompressedImage
@@ -19,10 +19,10 @@ Subscribes (BestEffort unless noted):
   /bridge/safety/estop               g1_onboard_msgs/EstopFlag       [Reliable]
 
 Publishes (Reliable):
-  /bridge/cmd/arm        g1_onboard_msgs/JointCmdChunk  rt/arm_sdk, IF-6 (CONV-006 REVISED)
-  /bridge/cmd/low        g1_onboard_msgs/JointCmdChunk  rt/lowcmd, NEW 2026-05-22 (CONV-006 REVISED)
+  /bridge/cmd/arm        g1_onboard_msgs/JointCmdChunk  rt/arm_sdk, IF-6
+  /bridge/cmd/low        g1_onboard_msgs/JointCmdChunk  rt/lowcmd, NEW 2026-05-22
   /bridge/cmd/loco       g1_onboard_msgs/LocoCommand    StandUp/Damp/SitDown
-  /bridge/cmd/vel        geometry_msgs/Twist            NavigationProvider walking velocity (CONV-012)
+  /bridge/cmd/vel        geometry_msgs/Twist            NavigationProvider walking velocity
   /bridge/cmd/audio_out  g1_onboard_msgs/AudioPCM       TTS playback
 
 Deprecated, NOT handled: /bridge/cmd/nav_goal, /bridge/nav/state
@@ -85,7 +85,7 @@ class JointCmd(TypedDict):
 
     In-process shape for one step inside a ``JointCmdChunk``. The wire
     no longer carries single-step ``JointCmd`` for VLA — chunks are the
-    unit (CONV-006 REVISED 2026-05-26). ``step_index`` is retained for
+    unit (2026-05-26). ``step_index`` is retained for
     trace/log, ``chunk_id`` for self-contained per-step logging.
     """
 
@@ -107,7 +107,7 @@ class JointCmd(TypedDict):
 
 class JointCmdChunk(TypedDict):
     """
-    Action chunk wire payload (CONV-006 REVISED 2026-05-26).
+    Action chunk wire payload (2026-05-26).
 
     Mirrors ``g1_onboard_msgs/JointCmdChunk.msg``. The PC VLAProvider
     builds one of these per arm/low half per inference; NX
@@ -352,8 +352,7 @@ class UnitreeG1Provider:
         Consumer (TBD): VLA Provider may poll this to detect NX ring-buffer
         near-empty and proactively re-trigger ``infer()`` so the next chunk
         lands before the previous one fully drains. Underflow itself is
-        handled by NX motor_controller (republish last step at 100 Hz —
-        CONV-006 REVISED).
+        handled by NX motor_controller (republish last step at 100 Hz).
         """
         return self._buf_state
 
@@ -442,7 +441,7 @@ class UnitreeG1Provider:
         """
         Publish a ``JointCmdChunk`` (rt/arm_sdk path) to ``/bridge/cmd/arm``.
 
-        CONV-006 REVISED 2026-05-26 — wire unit is the chunk, not the step.
+        2026-05-26 — wire unit is the chunk, not the step.
         NX motor_controller unpacks ``chunk.steps`` into ``joint_buf`` and
         paces at 100 Hz. Weight respected on NX side
         (motor_cmd[29].q ramp). ICD IF-6 (arm joint set) applies to
@@ -456,7 +455,7 @@ class UnitreeG1Provider:
         """
         Publish a ``JointCmdChunk`` (rt/lowcmd path) to ``/bridge/cmd/low``.
 
-        CONV-006 REVISED 2026-05-26 — wire unit is the chunk. NEW
+        2026-05-26 — wire unit is the chunk. NEW
         2026-05-22 (whole-body VLA walking) topic; weight ignored on NX
         side. NX motor_controller unpacks ``chunk.steps`` into
         ``joint_buf`` and paces at 100 Hz.
