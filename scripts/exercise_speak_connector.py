@@ -1,5 +1,5 @@
 """
-Exercise SpeakConnector [TASK-45] — CONV-009 log-based verification.
+Exercise SpeakConnector [TASK-45] — log-based verification.
 
 Verifies the fire-and-forget contract without a live TTS backend:
   - connect() forwards SpeakInput.action to TTSProvider.synthesize.

@@ -1,5 +1,5 @@
 """
-Exercise TTSProvider [TASK-43] — CONV-009 log-based verification.
+Exercise TTSProvider [TASK-43] — log-based verification.
 
 Verifies the decode → resample → publish path and the E-STOP gate WITHOUT
 live Naver Clova credentials or a real NX speaker:

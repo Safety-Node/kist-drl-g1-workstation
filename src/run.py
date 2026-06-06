@@ -1,8 +1,8 @@
 """
 KIST DRL G1 Workstation entrypoint — mini-runner replacing OM1 ModeCortexRuntime
-(the demo uses TaskSrvProvider, not an LLM Cortex; CONV-001/004).
+(the demo uses TaskSrvProvider, not an LLM Cortex).
 
-Startup order is load-bearing (CONV-001/010): UnitreeG1 → STT/TTS/VLA/Nav →
+Startup order is load-bearing: UnitreeG1 → STT/TTS/VLA/Nav →
 Move/Speak connectors → TaskSrvProvider(bind + start) → backgrounds → SoundSensor
 (last, so STT callbacks fan out only once TaskSrvBg can drain the queue — R4).
 Other Provider→Provider deps are @singletons fetched in consumers' __init__, so
@@ -82,19 +82,19 @@ def _build_runtime(scenario_file: Optional[str] = None) -> _Runtime:
     rt = _Runtime()
 
     # UnitreeG1 FIRST so the others' @singleton fetch (in their __init__)
-    # returns this instance, not a fresh default (CONV-010).
+    # returns this instance, not a fresh default.
     unitree_g1 = UnitreeG1Provider()
     stt = STTProvider(STTConfig())
     tts = TTSProvider(TTSConfig())
     vla = VLAProvider(VLAConfig())
-    navigation = NavigationProvider(NavigationProviderConfig())  # CONV-012: loco split off VLA
+    navigation = NavigationProvider(NavigationProviderConfig())  # loco split off VLA
     rt.providers = [unitree_g1, stt, tts, vla, navigation]
 
     # Connectors: stateless adapters; their __init__ fetches provider singletons.
     move_conn = MoveConnector(ActionConfig())
     speak_conn = SpeakConnector(ActionConfig())
 
-    # Orchestrator — non-singleton connectors injected via bind() (CONV-010).
+    # Orchestrator — non-singleton connectors injected via bind().
     task_cfg = TaskSrvConfig() if scenario_file is None else TaskSrvConfig(scenario_file=scenario_file)
     rt.task_srv = TaskSrvProvider(task_cfg)
     rt.task_srv.bind(move_connector=move_conn, speak_connector=speak_conn)
@@ -248,7 +248,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rt.stop_event.wait()       # block until SIGINT/SIGTERM
     finally:
         failures = _stop_runtime(rt)
-    # Surface .stop() failures via exit code (CONV-009: logs are the verification surface).
+    # Surface .stop() failures via exit code (logs are the verification surface).
     return 2 if failures else 0
 
 

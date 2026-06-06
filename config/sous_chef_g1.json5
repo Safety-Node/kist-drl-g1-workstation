@@ -1,17 +1,17 @@
 // sous_chef_g1.json5 — KIST G1 sous-chef demo ("주방보조 G1 로봇").
-// OM1 mode_config shape; per-provider explicit configs in `providers:` (CONV-001).
+// OM1 mode_config shape; per-provider explicit configs in `providers:`.
 // run.py loader: TODO (currently uses dataclass defaults).
 
 {
   hertz: 10,
   name: "sous_chef_g1",
-  system_prompt_base: "",                              // CONV-004: LLM Cortex deferred
+  system_prompt_base: "",                              // LLM Cortex deferred
 
   agent_inputs: [
     { type: "SoundSensor", config: { buffer_size: 5, min_confidence: 0.3, dedupe_window_s: 1.5 } },
   ],
 
-  cortex_llm: null,                                    // CONV-004
+  cortex_llm: null,                                    // LLM Cortex deferred
 
   agent_actions: [
     { name: "move",  implementation: "MoveConnector",  config: {} },
@@ -23,7 +23,7 @@
     { type: "GUIBackground", config: {} },
   ],
 
-  // KIST extension (CONV-001): providers are explicit, not lazy-init.
+  // KIST extension: providers are explicit, not lazy-init.
   providers: {
     unitree_g1: {
       ros_domain_id: 0,
@@ -49,11 +49,11 @@
       backend: "groot_n17",
       model_server_url: "http://localhost:8000",
       // matches KIST fine-tune choice (NVIDIA example default is 8;
-      // 16 per KIST measurement, source TBD — see CONV-006 REVISED).
+      // 16 per KIST measurement, source TBD).
       // Drives JointCmdChunk.steps[] length on /bridge/cmd/{arm,low}.
       action_horizon: 16,
       // PC publishes chunks at the VLA inference cadence; NX paces 100 Hz
-      // (CONV-006 REVISED 2026-05-26). Assumed ~15 Hz — KIST L40
+      // (2026-05-26). Assumed ~15 Hz — KIST L40
       // ~63.9 ms / chunk (~15.6 Hz, source TBD); RTX 4090 unmeasured.
       // Informational: setting this higher does NOT make the model emit
       // faster.
@@ -66,7 +66,7 @@
       tick_rate_hz: 10.0,
       cancel_keywords: ["취소", "그만", "멈춰"],
     },
-    // CONV-012 2026-05-26: locomotion split out of VLA into a PC-side
+    // 2026-05-26: locomotion split out of VLA into a PC-side
     // NavigationProvider. Emits Twist on /bridge/cmd/vel → NX
     // motor_controller LocoClient.Move(vx, vy, vyaw). control_rate_hz
     // TBD — 5/26 회의에서는 10-50 Hz 추정.

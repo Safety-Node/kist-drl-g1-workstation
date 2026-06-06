@@ -1,5 +1,5 @@
 """
-Exercise STTProvider (DUMMY backend) — CONV-009 log-based verification.
+Exercise STTProvider (DUMMY backend) — log-based verification.
 
 Tests the filter chain and state machine without a live mic, ROS 2, or
 Google Cloud credentials.  UnitreeG1Provider callbacks (register_audio_callback /

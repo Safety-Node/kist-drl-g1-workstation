@@ -2,13 +2,13 @@
 Move Connector [TASK-44, REQ-31]
 
 Routes TaskSrvProvider sub-task prompts (free-form text) to one of three
-downstream paths (CONV-012 2026-05-26 split):
+downstream paths (2026-05-26 split):
   1. discrete LocoClient preset (StandUp / SitDown / Damp / BalanceStand)
      via UnitreeG1.publish_loco_cmd — demo entry/exit + posture fallback
   2. navigation (continuous walking velocity) via NavigationProvider —
      PC NavigationProvider runs an internal Kalman + planner and emits
      Twist on /bridge/cmd/vel → NX motor_controller LocoClient.Move
-  3. manipulation (arm + hand only post-CONV-012) via VLA Provider —
+  3. manipulation (arm + hand only post-split) via VLA Provider —
      whole-body VLA chunk stream on /bridge/cmd/{arm,low}
 
 Routing policy (case-insensitive substring on prompt):
@@ -18,7 +18,7 @@ Routing policy (case-insensitive substring on prompt):
 
 Order matters: discrete loco is checked first because "stand up" could
 otherwise be ambiguous with a future nav keyword; nav is checked before
-VLA because the VLA scope shrank to arm/hand on 2026-05-26 (CONV-005
+VLA because the VLA scope shrank to arm/hand on 2026-05-26 (VLA
 범위 축소 — locomotion 분리).
 
 Threading + error policy:
@@ -62,7 +62,7 @@ _LOCO_MAP = {
 _LOCO_KEYWORDS = tuple(_LOCO_MAP.keys())
 
 # Navigation keyword set — substring match against the lowercased prompt.
-# Continuous walking goes through NavigationProvider (CONV-012); the
+# Continuous walking goes through NavigationProvider; the
 # discrete LocoClient presets above ("stand up" etc.) win when both
 # match, see ``_route`` order.
 _NAV_KEYWORDS = frozenset({
@@ -76,7 +76,7 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
 
     def __init__(self, config: ActionConfig):
         super().__init__(config)
-        # CONV-001 ordering: run.py constructs all Provider singletons
+        # Ordering: run.py constructs all Provider singletons
         # before this connector, so the @singleton fetches return the
         # already-built instances.
         self._vla = VLAProvider()
@@ -93,7 +93,7 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
 
 
 def _route(prompt: str) -> None:
-    """3-way prompt router (CONV-012 2026-05-26).
+    """3-way prompt router (2026-05-26).
 
     Reference dispatch shared by ``MoveConnector.connect()`` (async path)
     and any synchronous test/CLI driver. Not called from production code

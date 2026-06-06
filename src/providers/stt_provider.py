@@ -4,7 +4,7 @@ STT Provider [TASK-42, REQ-27].
 Vendor-agnostic Speech-to-Text streaming. Default backend: Google Cloud STT v1
 bidi streaming. PCM in (16 kHz mono from /bridge/sensors/audio_pcm via
 UnitreeG1Provider push callback) → TranscriptEvent out via callback list
-(→ Sound Sensor → TaskSrvProvider, CONV-004).
+(→ Sound Sensor → TaskSrvProvider).
 
 Echo cancellation: drops audio while ``speaker_state.playing == True``, with
 ``echo_cancel_tail_ms`` tail-off after the flag clears.  Silent PCM of equal
@@ -40,7 +40,7 @@ class STTBackend(str, Enum):
     """Speech-to-Text backend selector."""
 
     GOOGLE_CLOUD = "google_cloud"
-    DUMMY = "dummy"       # local verification (CONV-009); no credentials needed
+    DUMMY = "dummy"       # local verification; no credentials needed
     # WHISPER = "whisper"
     # RIVA    = "riva"
 
@@ -103,7 +103,7 @@ class STTProvider:
     def __init__(self, config: Optional[STTConfig] = None):
         self._config = config or STTConfig()
         self._state = STTState.IDLE   # running == (state != IDLE); no separate flag
-        # CONV-010: dep is a @singleton, fetched here. run.py MUST construct
+        # Dep is a @singleton, fetched here. run.py MUST construct
         # UnitreeG1Provider first, otherwise we create it with default config
         # and run.py's later UnitreeG1Provider(...) returns this same instance.
         self._unitree_g1 = UnitreeG1Provider()
@@ -460,7 +460,7 @@ class STTProvider:
         logging.info("STTProvider: Google worker stopped")
 
     # ------------------------------------------------------------------
-    # DUMMY backend (CONV-009 local verification — no credentials needed)
+    # DUMMY backend (local verification — no credentials needed)
     # ------------------------------------------------------------------
     def _dummy_worker(self) -> None:
         """Decode non-silent PCM chunks as UTF-8 and emit TranscriptEvents.

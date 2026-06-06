@@ -26,7 +26,7 @@ Speech I/O, VLA inference, task orchestration, GUI streaming.
 | 7 | Speak Connector | `src/actions/speak/connector/speak_connector.py` | Text → TTS Provider |
 | 8 | Sound Sensor | `src/inputs/plugins/sound_sensor.py` | STT transcript → TaskSrvProvider |
 | 9 | GUI Background | `src/backgrounds/plugins/gui_background.py` | Streams video + task status to Display System |
-| 10 | IOProvider | `src/providers/io_provider.py` | OM1 infra — NOT used in KIST flow (CONV-011) |
+| 10 | IOProvider | `src/providers/io_provider.py` | OM1 infra — NOT used in KIST flow |
 
 Deferred (kept in repo as `[DEPRECATED]` only in spec; not implemented):
 - VLM Provider (Cosmos), Safety Provider, LLM Cortex — see SYS-REQ `[DEPRECATED 2026-05-24]`.
@@ -37,7 +37,7 @@ Deferred (kept in repo as `[DEPRECATED]` only in spec; not implemented):
 
 PC requirements:
 - Ubuntu 22.04 (must match NX onboard distro)
-- ROS 2 humble (must match NX onboard distro per CONV-002)
+- ROS 2 humble (must match NX onboard distro)
 - Python 3.10 (Humble system Python; uv pinned to match — rclpy ABI is tied to the system Python minor version)
 
 ```bash
@@ -58,7 +58,7 @@ uv sync --extra dds
 # imported by KIST code — init only what's used.
 git submodule update --init src/unitree
 
-# Credentials — loaded from repo-root .env by src/run.py (python-dotenv, CONV-001).
+# Credentials — loaded from repo-root .env by src/run.py (python-dotenv).
 # Required keys: NCP_CLOVA_CLIENT_ID / NCP_CLOVA_CLIENT_SECRET (TTS),
 # GOOGLE_APPLICATION_CREDENTIALS (path to GCP service-account JSON for STT).
 cp .env.example .env
@@ -92,7 +92,7 @@ Scenario: `src/run.py [scenario]` loads exactly one JSON5 file from `config/scen
 (e.g. `move_test` → `move_test.json5`); omit the arg for the default. Add a scenario by
 dropping a `.json5` file there — see `move_test.json5` for the hook/criteria schema.
 
-PC↔NX transport: rclpy + CycloneDDS direct (CONV-002 — no Zenoh bridge daemon).
+PC↔NX transport: rclpy + CycloneDDS direct (no Zenoh bridge daemon).
 PC and NX must share the same DDS domain + `cyclonedds.xml` network interface.
 
 `safety_monitor` / `motor_controller` run on the NX (see `kist-drl-g1-onboard`).
@@ -109,7 +109,7 @@ PC and NX must share the same DDS domain + `cyclonedds.xml` network interface.
 | Verification | [Tests DB](https://www.notion.so/a67e62ef1cfc4f85be29a340107846b6) |
 
 Each `TODO(REQ-XX) [TASK-XX]` in code links to the matching Notion page.
-Code-level architectural decisions (CONV-001..013) live in the [Notion **CONV** page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e). In-code `CONV-xxx` citations refer to that page (same numbering; Notion is the single source of truth).
+Code-level architectural decisions live in the [Notion **CONV** page](https://app.notion.com/p/377b39de7dd780b391f3ceec30226a0e).
 
 ---
 
@@ -117,9 +117,9 @@ Code-level architectural decisions (CONV-001..013) live in the [Notion **CONV** 
 
 - Non-G1 platforms removed (Go2 / Turtlebot4 / Yanshee / Booster / LimX K1·Tron / Spot / Cubly)
 - Multi-vendor backends pruned (VLM / ASR / TTS / Web3 / Telegram / Twitter / Discord / Tesla / GPS / RTK ...)
-- LLM Cortex deferred → TaskSrvProvider scripted orchestration (CONV-004)
-- IOProvider unused in KIST data flow; direct singleton polling (CONV-010, CONV-011)
-- No pytest infra — `system_hw_test/` + dev logging only (CONV-009)
+- LLM Cortex deferred → TaskSrvProvider scripted orchestration
+- IOProvider unused in KIST data flow; direct singleton polling
+- No pytest infra — `system_hw_test/` + dev logging only
 - Upstream merge path inactive — no `upstream` git remote configured. OM1 changes are
   not auto-tracked; any future absorption is a manual cherry-pick.
 - Two submodules pinned from upstream OM1:

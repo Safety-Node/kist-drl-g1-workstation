@@ -1,7 +1,7 @@
 """
 TaskSrvProvider [REQ-44, TASK-39] — hook-driven scenario orchestrator.
 
-Replaces the LLM Cortex for the KIST demo (CONV-004). A scenario is a list of
+Replaces the LLM Cortex for the KIST demo. A scenario is a list of
 sub-tasks; each sub-task is a small lifecycle machine:
 
     on_create → on_start → (poll `success` each tick) → on_success | on_fail
@@ -10,7 +10,7 @@ Each hook is an ordered list of Actions (Speak / Move / ...). A connector call
 is just an Action, so it is freely included or omitted per hook. Success is a
 polymorphic Criterion that reads sensors (UWB / joint) AND voice transcripts,
 which lets a spoken command complete a sub-task. Scenarios are JSON5 data under
-``config/scenarios/*.json5`` (see CONV-013); the types they reference live in
+``config/scenarios/*.json5``; the types they reference live in
 this file.
 
 Loop ownership: ``run(stop_event)`` owns the asyncio loop — it pumps ``tick()``
@@ -21,8 +21,8 @@ Threading: ``on_audio`` is called from the STT thread and only enqueues
 (thread-safe). All state mutation happens on the loop thread (``tick`` drains
 the queue; hooks are loop tasks). One writer → no locks.
 
-This file is intentionally one module (CONV-013): with no pytest infra
-(CONV-009) the modularity payoff is nil, and one-provider-one-file matches the
+This file is intentionally one module: with no pytest infra
+the modularity payoff is nil, and one-provider-one-file matches the
 rest of the codebase. Sections: resolve · context · criteria · actions ·
 scenario model · loader · engine.
 """
@@ -457,7 +457,7 @@ class TaskSrvConfig:
     stale_audio_s: float = 5.0
     # Connect pacing is per-action (Action.delay in the scenario json5), not here.
     # Loop pump (owned by TaskSrvProvider.run).
-    heartbeat_every_ticks: int = 50          # INFO heartbeat cadence; CONV-009. 0 disables.
+    heartbeat_every_ticks: int = 50          # INFO heartbeat cadence. 0 disables.
     swallow_tick_exceptions: bool = True     # log+continue vs stop the loop
 
 
@@ -662,7 +662,7 @@ class TaskSrvProvider:
 
     # -- wiring / lifecycle ------------------------------------------------
     def bind(self, move_connector: T.Any = None, speak_connector: T.Optional[T.Any] = None) -> None:
-        """Wire the non-singleton Connectors (CONV-010). Both optional."""
+        """Wire the non-singleton Connectors. Both optional."""
         self._move_connector = move_connector
         self._speak_connector = speak_connector
 

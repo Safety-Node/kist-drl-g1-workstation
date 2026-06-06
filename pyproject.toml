@@ -12,7 +12,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     "aiohttp==3.13.4",
     "nest-asyncio==1.6.0",
-    # ROS 2 / DDS transport (CONV-002)
+    # ROS 2 / DDS transport
     "pycdr2==1.0.0",
     "eclipse-zenoh==1.4.0",        # OM1 internal loopback only (mode mgr, config provider)
     "cv_bridge==1.13.0.post0",
@@ -35,7 +35,7 @@ dependencies = [
     # Misc
     "matplotlib==3.10.1",
     "om1-modules @ git+https://github.com/OpenMind/om1-modules.git@5a8a633d08c3538f62ceba3dd36d5200c9eb0ca2",
-    # LLM Cortex revival prep (CONV-004): OM1 runtime/cortex.py + llm/ still
+    # LLM Cortex revival prep: OM1 runtime/cortex.py + llm/ still
     # import openai. Kept so the dormant LLM stack continues to import; not
     # called from our run.py path.
     "openai==1.60.1",

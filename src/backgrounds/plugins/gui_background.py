@@ -14,7 +14,7 @@ Status JSON:
     "subtask": { "name": str, "i": int, "n": int } | null,
     "state": "idle|active|success|failed" }
 
-Polled (CONV-010/011, no IOProvider):
+Polled (no IOProvider):
   UnitreeG1Provider.color.value (JPEG)
   TaskSrvProvider.state / .active_scenario_name / .active_sub_task(.name)
                  / .active_sub_task_index / .active_sub_task_total
@@ -50,7 +50,7 @@ class GUIBackgroundConfig(BackgroundConfig):
     heartbeat_every_frames: int = Field(
         default=75,                          # 5 s at 15 fps
         ge=0,
-        description="INFO heartbeat every N frames (CONV-009 — makes the loop observable). 0 disables.",
+        description="INFO heartbeat every N frames (makes the loop observable). 0 disables.",
     )
 
 
@@ -59,7 +59,7 @@ class GUIBackground(Background[GUIBackgroundConfig]):
 
     def __init__(self, config: GUIBackgroundConfig):
         super().__init__(config)
-        # CONV-010: providers fetched directly (no IOProvider). run.py builds them first.
+        # Providers fetched directly (no IOProvider). run.py builds them first.
         self._unitree_g1 = UnitreeG1Provider()
         self._task_srv = TaskSrvProvider()
         self._clients: Set[Any] = set()
@@ -139,7 +139,7 @@ class GUIBackground(Background[GUIBackgroundConfig]):
     def _snapshot(self) -> Tuple[Optional[bytes], dict]:
         """Poll camera + task status into (jpeg_bytes | None, status_dict).
 
-        Direct access (CONV-010 guarantees the providers are constructed before
+        Direct access (the providers are guaranteed constructed before
         this background). Any surprise is contained by the pump's try/finally.
         """
         jpeg = _jpeg_bytes(self._unitree_g1.color.value)
