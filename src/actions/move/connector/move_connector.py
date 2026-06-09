@@ -28,10 +28,6 @@ Threading + error policy:
     one-line warnings and disappear (demo-debug nightmare). Implementation
     MUST try/except and log + swallow.
 
-TODO(REQ-31) [TASK-44]: implement routing keyword dispatch in connect().
-TODO(REQ-31) [TASK-44]: try/except wrap VLA.infer + publish_loco_cmd +
-                        NavigationProvider.submit_nav_subtask — log +
-                        swallow per fire-and-forget caller contract.
 TODO(REQ-31) [TASK-44]: stop() lifecycle — track in-flight asyncio tasks
                         (weak-ref set), cancel on shutdown. Add Connector
                         to run.py._stop_runtime once stop() actually does
@@ -42,7 +38,9 @@ TODO(REQ-31) [TASK-44]: E-STOP cancellation — UnitreeG1.estop edge triggers
                         own estop callback for zero-Twist publish).
 """
 
+import asyncio
 import logging
+import weakref
 
 from actions.base import ActionConfig, ActionConnector
 from actions.move.interface import MoveInput
@@ -59,16 +57,15 @@ _LOCO_MAP = {
     "damp": "Damp",
     "balance stand": "BalanceStand",
 }
-_LOCO_KEYWORDS = tuple(_LOCO_MAP.keys())
 
 # Navigation keyword set — substring match against the lowercased prompt.
-# Continuous walking goes through NavigationProvider; the
-# discrete LocoClient presets above ("stand up" etc.) win when both
-# match, see ``_route`` order.
+# Discrete LocoClient presets above ("stand up" etc.) win when both match.
 _NAV_KEYWORDS = frozenset({
-    "walk", "go to", "move to", "navigate", "approach",
-    "걸어", "가", "이동", "접근",
+    "walk to", "go to", "move to", "navigate",
+    "걸어", "이동", "접근",
 })
+
+_log = logging.getLogger(__name__)
 
 
 class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
@@ -76,39 +73,49 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
 
     def __init__(self, config: ActionConfig):
         super().__init__(config)
-        # Ordering: run.py constructs all Provider singletons
-        # before this connector, so the @singleton fetches return the
-        # already-built instances.
+        # run.py constructs Provider singletons before connectors (CONV-010),
+        # so these fetches return the already-built instances.
         self._vla = VLAProvider()
         self._unitree_g1 = UnitreeG1Provider()
         self._navigation = NavigationProvider()
-        logging.info("MoveConnector: skeleton initialized")
+        # Weak-ref set of in-flight asyncio.Tasks for stop() cancellation.
+        # TODO(REQ-31) [TASK-44]: wire into stop() + run.py._stop_runtime.
+        self._inflight: weakref.WeakSet = weakref.WeakSet()
+        _log.info("MoveConnector: initialized")
 
     async def connect(self, output_interface: MoveInput) -> None:
-        # TODO(REQ-31) [TASK-44]: try/except — log + swallow, NEVER re-raise
-        # TODO(REQ-31) [TASK-44]: 3-way routing — discrete loco → nav → VLA.
-        #     See module docstring; same dispatch as ``_route`` below
-        #     once the awaitable contract for VLA.infer is settled.
-        raise NotImplementedError("MoveConnector.connect: TBD [TASK-44]")
+        """Route prompt to loco / nav / VLA path. Never re-raises (fire-and-forget contract)."""
+        prompt = output_interface.action
+        key = prompt.strip().lower()
 
+        # Register current task for future stop() cancellation.
+        task = asyncio.current_task()
+        if task is not None:
+            self._inflight.add(task)
 
-def _route(prompt: str) -> None:
-    """3-way prompt router (2026-05-26).
+        try:
+            # 1. Discrete LocoClient preset — checked first (deterministic FSM)
+            for kw, name in _LOCO_MAP.items():
+                if kw in key:
+                    _log.info("MoveConnector: loco path — %s (prompt=%r)", name, prompt)
+                    self._unitree_g1.publish_loco_cmd({"name": name})
+                    return
 
-    Reference dispatch shared by ``MoveConnector.connect()`` (async path)
-    and any synchronous test/CLI driver. Not called from production code
-    until ``connect()`` is implemented — kept here so the routing policy
-    has one source of truth.
-    """
-    key = prompt.strip().lower()
-    # 1. Discrete LocoClient preset (StandUp/SitDown/...)
-    for kw, name in _LOCO_MAP.items():
-        if kw in key:
-            UnitreeG1Provider().publish_loco_cmd({"name": name})
-            return
-    # 2. Navigation (continuous walking via NavigationProvider)
-    if any(kw in key for kw in _NAV_KEYWORDS):
-        NavigationProvider().submit_nav_subtask(prompt)
-        return
-    # 3. Manipulation (VLA arm/hand)
-    VLAProvider().infer(prompt)
+            # 2. Navigation — continuous walking via NavigationProvider
+            if any(kw in key for kw in _NAV_KEYWORDS):
+                _log.info("MoveConnector: nav path — prompt=%r", prompt)
+                self._navigation.submit_nav_subtask(prompt)
+                return
+
+            # 3. Manipulation — VLA arm/hand chunk stream
+            _log.info("MoveConnector: VLA path — prompt=%r", prompt)
+            await self._vla.infer(prompt)
+
+        except asyncio.CancelledError:
+            _log.info("MoveConnector: connect() cancelled (prompt=%r)", prompt)
+            raise  # CancelledError must propagate for asyncio task lifecycle
+        except Exception:
+            _log.exception(
+                "MoveConnector: connect() error (prompt=%r) — swallowing per fire-and-forget contract",
+                prompt,
+            )
