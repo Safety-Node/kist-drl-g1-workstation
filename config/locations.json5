@@ -1,0 +1,13 @@
+// Navigable locations — UWB map frame (meters).
+// Keys are matched case-insensitively against the nav sub-task prompt.
+// Longer keys are tried first so "refrigerator" wins over "fridge" if both appear.
+// Coordinates: [x, y].  Placeholder values; update after UWB calibration.
+{
+  // ── L8 실험실 (KIST 건물 8층) ──────────────────────────────────────
+  "refrigerator": [2.10, -0.40],
+  "fridge":       [2.10, -0.40],
+  "냉장고":         [2.10, -0.40],
+
+  "table":        [0.50,  0.30],
+  "식탁":          [0.50,  0.30],
+}
