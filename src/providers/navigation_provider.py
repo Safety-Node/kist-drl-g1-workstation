@@ -8,12 +8,13 @@ Position source : /bridge/sensors/location  (EKF-fused PoseStamped, map frame)
 Obstacle source : /bridge/sensors/lidar/occupancy  (OccupancyGrid, map frame)
 Location table  : config/locations.json5  (place_id → [x, y])
 
-Algorithm: holonomic potential-field.
-  - Attractive velocity toward goal (P-controller, capped to max_speed).
-  - Repulsive velocity away from OccupancyGrid obstacles within
-    repulsion_radius.
-  - Net velocity rotated from map → body frame using robot yaw.
-  - Yaw rate = P-controller toward the net velocity heading.
+Algorithm: A* on BFS-inflated costmap + lookahead path follower.
+  1. Route planning  — A* finds a cell-path on the inflated costmap once per
+     goal (re-planned each time the goal or occupancy map changes).
+  2. Path following  — Each tick the robot projects itself onto the path,
+     picks a point `lookahead_cells` ahead, and drives toward it with a
+     P-controller (map-frame attraction, then rotated to body frame).
+  3. Yaw control    — P-controller toward the net velocity heading.
 
 Lifecycle:
   start()  → spin control thread + register estop callback
@@ -31,19 +32,22 @@ import logging
 import math
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import json5
 import numpy as np
+import yaml
 
 from .singleton import singleton
 from .unitree_g1_provider import UnitreeG1Provider
+from .utils.route_utils import astar, c2m, inflate_costmap, m2c
 
 _log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REPO_ROOT        = Path(__file__).resolve().parent.parent.parent
+_NAV_CONFIG_PATH  = Path(__file__).resolve().parent / "config" / "navigation" / "config.yaml"
 
 
 def _quat_to_yaw(q) -> float:
@@ -65,26 +69,64 @@ def _wrap_pi(a: float) -> float:
 class NavigationProviderConfig:
     """NavigationProvider runtime configuration."""
 
-    control_rate_hz: float = 10.0
-    locations_file: str = "config/locations.json5"
+    control_rate_hz: float = 20.0
+    locations_file:  str   = "src/providers/config/navigation/locations.json5"
 
     # Speed limits
-    max_speed: float = 0.5      # m/s — translational cap (body frame)
-    max_vyaw: float = 0.8       # rad/s — yaw rate cap
+    max_speed: float = 0.5
+    max_vyaw:  float = 0.8
 
     # Attraction gains
-    kp_xy: float = 0.8          # P-gain for goal attraction (1/s)
-    kp_yaw: float = 1.5         # P-gain for heading alignment (1/s)
+    kp_xy:  float = 0.8
+    kp_yaw: float = 1.5
 
     # Arrival
-    arrival_tol: float = 0.25   # m — goal reached when dist < this
+    arrival_tol: float = 0.25
 
-    # Obstacle repulsion
-    repulsion_gain: float = 0.2   # m²/s
-    repulsion_radius: float = 0.8 # m — obstacle influence distance
+    # Path following
+    lookahead_cells:  int   = 20
+    planner_rate_hz:  float = 20.0
+    astar_weight:     float = 1.0   # f = g + w*h (1.0=optimal, >1 suppresses detours)
 
     # Stale-data handling
-    pose_timeout_s: float = 0.5   # s — wait for pose if stale
+    pose_timeout_s: float = 0.5
+
+    # Costmap
+    base_cost:  float = 1.0
+    obs_cost:   float = 9999.0
+    decay_rate: float = 0.3    # fraction reduced per BFS step from obs_cost
+
+
+def _load_nav_config() -> NavigationProviderConfig:
+    """Load NavigationProviderConfig from config/navigation/config.yaml."""
+    try:
+        raw = yaml.safe_load(_NAV_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        _log.warning("NavigationProvider: config not found at %s, using defaults", _NAV_CONFIG_PATH)
+        return NavigationProviderConfig()
+    except Exception:
+        _log.exception("NavigationProvider: failed to load config, using defaults")
+        return NavigationProviderConfig()
+
+    def _g(section: str, key: str, default):
+        return raw.get(section, {}).get(key, default)
+
+    return NavigationProviderConfig(
+        control_rate_hz    = _g("control",  "rate_hz",           20.0),
+        pose_timeout_s     = _g("control",  "pose_timeout_s",     0.5),
+        max_speed          = _g("speed",    "max_speed",           0.5),
+        max_vyaw           = _g("speed",    "max_vyaw",            0.8),
+        kp_xy              = _g("gains",    "kp_xy",               0.8),
+        kp_yaw             = _g("gains",    "kp_yaw",              1.5),
+        arrival_tol        = _g("arrival",  "tol",                 0.25),
+        lookahead_cells    = _g("path", "lookahead_cells",  20),
+        planner_rate_hz    = _g("path", "planner_rate_hz",  20.0),
+        astar_weight       = _g("path", "astar_weight",      2.0),
+        base_cost  = _g("costmap", "base_cost",  1.0),
+        obs_cost   = _g("costmap", "obs_cost",   9999.0),
+        decay_rate = _g("costmap", "decay_rate", 0.3),
+        locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
+    )
 
 
 @dataclass(frozen=True)
@@ -93,7 +135,7 @@ class NavigationState:
     vx: float = 0.0
     vy: float = 0.0
     vyaw: float = 0.0
-    mode: str = "IDLE"    # IDLE / NAVIGATING / ARRIVED / ESTOP / WAITING_POSE
+    mode: str = "IDLE"    # IDLE / NAVIGATING / ARRIVED / ESTOP / WAITING_POSE / PLANNING
     goal_id: Optional[str] = None
     dist_to_goal: float = 0.0
 
@@ -105,14 +147,14 @@ class NavigationState:
 @singleton
 class NavigationProvider:
     """
-    PC-side holonomic navigation (REQ "PC NavigationProvider").
+    PC-side A*+lookahead navigation (REQ "PC NavigationProvider").
 
     Consumes nav sub-task prompts from MoveConnector, drives the robot to
     named locations defined in config/locations.json5.
     """
 
     def __init__(self, config: Optional[NavigationProviderConfig] = None):
-        self._config = config or NavigationProviderConfig()
+        self._config = config if config is not None else _load_nav_config()
         self._unitree_g1 = UnitreeG1Provider()
 
         # Location table
@@ -121,8 +163,14 @@ class NavigationProvider:
 
         # Goal (written by submit_nav_subtask, read by worker)
         self._goal_lock = threading.Lock()
-        self._goal: Optional[Tuple[float, float]] = None
+        self._goal:    Optional[Tuple[float, float]] = None
         self._goal_id: Optional[str] = None
+
+        # Planned path (written and read exclusively by worker thread)
+        self._path:       Optional[List[Tuple[int, int]]] = None
+        self._path_goal:  Optional[Tuple[float, float]]   = None
+        self._path_grid:  object = None          # OccupancyGrid used for this path
+        self._last_plan_t: float = 0.0
 
         # E-STOP flag (written by estop callback, read by worker)
         self._estop_active: bool = False
@@ -133,7 +181,7 @@ class NavigationProvider:
 
         # Worker thread
         self._stop_evt = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread:   Optional[threading.Thread] = None
         self._running = False
 
         _log.info(
@@ -185,14 +233,14 @@ class NavigationProvider:
     # ------------------------------------------------------------------
 
     def submit_nav_subtask(self, prompt: str) -> None:
-        """Parse prompt → location → arm control loop. Non-blocking."""
+        """Parse prompt → location → queue for control loop. Non-blocking."""
         location_id = self._parse_location(prompt)
         if location_id is None:
             _log.warning("NavigationProvider: no known location in prompt %r", prompt)
             return
         gx, gy = self._locations[location_id]
         with self._goal_lock:
-            self._goal = (gx, gy)
+            self._goal    = (gx, gy)
             self._goal_id = location_id
         _log.info("NavigationProvider: goal set → %s (%.2f, %.2f)", location_id, gx, gy)
 
@@ -223,16 +271,15 @@ class NavigationProvider:
         # E-STOP wins unconditionally
         if self._estop_active:
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
-            self._set_state(NavigationState(
-                t_monotonic=time.monotonic(), mode="ESTOP",
-            ))
+            self._set_state(NavigationState(t_monotonic=time.monotonic(), mode="ESTOP"))
             return
 
         with self._goal_lock:
-            goal = self._goal
+            goal    = self._goal
             goal_id = self._goal_id
 
         if goal is None:
+            self._path = None
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(t_monotonic=time.monotonic()))
             return
@@ -241,7 +288,7 @@ class NavigationProvider:
         pose_cache = self._unitree_g1.location
         now = time.monotonic()
         if pose_cache.stale(now, self._config.pose_timeout_s):
-            _log.warning("NavigationProvider: waiting for robot pose...", stacklevel=2)
+            _log.warning("NavigationProvider: waiting for robot pose...")
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(
                 t_monotonic=now, mode="WAITING_POSE", goal_id=goal_id,
@@ -249,9 +296,9 @@ class NavigationProvider:
             return
 
         pose_msg = pose_cache.value
-        rx = pose_msg.pose.position.x
-        ry = pose_msg.pose.position.y
-        ryaw = _quat_to_yaw(pose_msg.pose.orientation)
+        rx    = pose_msg.pose.position.x
+        ry    = pose_msg.pose.position.y
+        ryaw  = _quat_to_yaw(pose_msg.pose.orientation)
 
         gx, gy = goal
         dx_g = gx - rx
@@ -260,93 +307,114 @@ class NavigationProvider:
 
         if dist < self._config.arrival_tol:
             with self._goal_lock:
-                self._goal = None
+                self._goal    = None
                 self._goal_id = None
+            self._path = None
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(
-                t_monotonic=time.monotonic(), mode="ARRIVED", goal_id=goal_id,
+                t_monotonic=now, mode="ARRIVED", goal_id=goal_id,
             ))
             _log.info("NavigationProvider: arrived at %s", goal_id)
             return
 
-        # Attractive velocity (map frame, capped)
-        att_speed = min(self._config.kp_xy * dist, self._config.max_speed)
-        vx_map = att_speed * dx_g / dist
-        vy_map = att_speed * dy_g / dist
-
-        # Repulsive velocity from occupancy grid
+        # Plan (or re-plan) path when needed
         occ_cache = self._unitree_g1.occupancy
-        if not occ_cache.stale(now, 0.5) and occ_cache.value is not None:
-            vx_rep, vy_rep = self._compute_repulsion(occ_cache.value, rx, ry)
-            vx_map += vx_rep
-            vy_map += vy_rep
+        need_plan = (
+            self._path is None
+            or self._path_goal != goal
+            or (now - self._last_plan_t) >= 1.0 / self._config.planner_rate_hz
+        )
+        if need_plan and not occ_cache.stale(now, 0.5) and occ_cache.value is not None:
+            self._do_plan(occ_cache.value, rx, ry, gx, gy, goal)
 
-        # Clamp total translational speed
-        speed = math.sqrt(vx_map * vx_map + vy_map * vy_map)
-        if speed > self._config.max_speed:
-            s = self._config.max_speed / speed
-            vx_map *= s
-            vy_map *= s
+        # Drive toward lookahead target (or direct to goal if no path)
+        if self._path is not None and self._path_grid is not None:
+            tx, ty = self._get_lookahead_target(rx, ry)
+        else:
+            tx, ty = gx, gy   # fallback: aim straight at goal
+
+        dx_t = tx - rx
+        dy_t = ty - ry
+        td   = math.sqrt(dx_t * dx_t + dy_t * dy_t)
+        if td < 0.01:
+            vx_map = vy_map = 0.0
+        else:
+            att_speed = min(self._config.kp_xy * td, self._config.max_speed)
+            vx_map    = att_speed * dx_t / td
+            vy_map    = att_speed * dy_t / td
 
         # Map frame → body frame
-        cos_y = math.cos(ryaw)
-        sin_y = math.sin(ryaw)
+        cos_y  =  math.cos(ryaw)
+        sin_y  =  math.sin(ryaw)
         vx_body =  cos_y * vx_map + sin_y * vy_map
         vy_body = -sin_y * vx_map + cos_y * vy_map
 
-        # Yaw: turn toward net velocity heading
+        # Yaw: align with net velocity heading
         desired_hdg = math.atan2(vy_map, vx_map)
-        hdg_err = _wrap_pi(desired_hdg - ryaw)
-        vyaw = max(-self._config.max_vyaw,
-                   min(self._config.max_vyaw, self._config.kp_yaw * hdg_err))
+        hdg_err     = _wrap_pi(desired_hdg - ryaw)
+        vyaw        = max(-self._config.max_vyaw,
+                         min(self._config.max_vyaw, self._config.kp_yaw * hdg_err))
 
         self._unitree_g1.publish_twist(vx_body, vy_body, vyaw)
         self._set_state(NavigationState(
-            t_monotonic=time.monotonic(),
+            t_monotonic=now,
             vx=vx_body, vy=vy_body, vyaw=vyaw,
             mode="NAVIGATING",
             goal_id=goal_id,
             dist_to_goal=dist,
         ))
 
-    def _compute_repulsion(self, grid, rx: float, ry: float) -> Tuple[float, float]:
-        info = grid.info
-        res = float(info.resolution)
-        ox = float(info.origin.position.x)
-        oy = float(info.origin.position.y)
-        w = int(info.width)
-        h = int(info.height)
-        r_r = self._config.repulsion_radius
-        gain = self._config.repulsion_gain
+    # ------------------------------------------------------------------
+    # Internal: path planning
+    # ------------------------------------------------------------------
 
-        # Decode obstacle cells
-        data = np.frombuffer(bytes(grid.data), dtype=np.int8).reshape(h, w)
-        rows, cols = np.where(data == 100)
-        if len(rows) == 0:
-            return 0.0, 0.0
+    def _do_plan(self, grid, rx: float, ry: float,
+                 gx: float, gy: float, goal: Tuple[float, float]) -> None:
+        t0 = time.monotonic()
+        cfg        = self._config
+        costmap    = inflate_costmap(grid, cfg.base_cost, cfg.obs_cost, cfg.decay_rate)
+        start_cell = m2c(grid, rx, ry)
+        goal_cell  = m2c(grid, gx, gy)
+        path       = astar(costmap, start_cell, goal_cell, cfg.obs_cost, cfg.astar_weight)
 
-        # Obstacle cell centers in map frame
-        cx = ox + (cols.astype(np.float32) + 0.5) * res
-        cy = oy + (rows.astype(np.float32) + 0.5) * res
+        elapsed = time.monotonic() - t0
+        if path:
+            self._path       = path
+            self._path_goal  = goal
+            self._path_grid  = grid
+            self._last_plan_t = time.monotonic()
+            _log.info(
+                "NavigationProvider: path planned (%d cells, %.3fs)",
+                len(path), elapsed,
+            )
+        else:
+            _log.warning(
+                "NavigationProvider: A* failed (%.3fs) start=%s goal=%s",
+                elapsed, start_cell, goal_cell,
+            )
 
-        # Vectors from obstacles toward robot (repulsion direction)
-        ddx = rx - cx
-        ddy = ry - cy
-        dist = np.sqrt(ddx * ddx + ddy * ddy)
+    def _get_lookahead_target(self, rx: float, ry: float) -> Tuple[float, float]:
+        """
+        Project robot onto path, return the cell `lookahead_cells` ahead
+        as map-frame (x, y).  Collapses to goal cell when near the end.
+        """
+        path  = self._path
+        grid  = self._path_grid
+        n     = len(path)
+        look  = self._config.lookahead_cells
 
-        # Only obstacles within repulsion radius; exclude zero-distance singularity
-        mask = (dist < r_r) & (dist > 0.05)
-        ddx = ddx[mask]
-        ddy = ddy[mask]
-        dist = dist[mask]
-        if len(dist) == 0:
-            return 0.0, 0.0
+        # Find closest path cell to current robot position
+        best_idx  = 0
+        best_dist = float('inf')
+        for i, (r, c) in enumerate(path):
+            px, py = _c2m(grid, r, c)
+            d = (px - rx)**2 + (py - ry)**2
+            if d < best_dist:
+                best_dist = d
+                best_idx  = i
 
-        # Gradient of 0.5 * gain * (1/d - 1/r)^2
-        mag = gain * (1.0 / dist - 1.0 / r_r) / (dist * dist)
-        vx_rep = float(np.sum(mag * ddx / dist))
-        vy_rep = float(np.sum(mag * ddy / dist))
-        return vx_rep, vy_rep
+        target_idx = min(best_idx + look, n - 1)
+        return c2m(grid, *path[target_idx])
 
     # ------------------------------------------------------------------
     # Internal: helpers
@@ -367,11 +435,11 @@ class NavigationProvider:
                 self._locations[name] = (float(coords[0]), float(coords[1]))
             else:
                 _log.warning("NavigationProvider: invalid coords for %r: %r", name, coords)
-        _log.info("NavigationProvider: loaded %d locations from %s", len(self._locations), locs_path.name)
+        _log.info("NavigationProvider: loaded %d locations from %s",
+                  len(self._locations), locs_path.name)
 
     def _parse_location(self, prompt: str) -> Optional[str]:
         lower = prompt.lower()
-        # Try longer keys first to prefer more specific matches
         for name in sorted(self._locations.keys(), key=len, reverse=True):
             if name.lower() in lower:
                 return name
