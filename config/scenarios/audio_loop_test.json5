@@ -1,0 +1,19 @@
+// 오디오 전체 루프 검증 전용 — move/VLA 없이 speak 만 사용.
+// verify_full_loop.py 가 사용:
+//   "오디오 테스트" → on_scenario_start speak  (cycle 1: mic→STT→TaskSrv→TTS→speaker)
+//   "테스트 끝"     → on_success speak + 시나리오 종료 (cycle 2)
+//   "그만"          → 즉시 탈출
+{
+  name: "audio_loop_test",
+  triggers: ["오디오 테스트", "오디오 테스트 시작"],
+  exit_keywords: ["그만"],
+  on_scenario_start: [{ speak: "오디오 루프 테스트 응답입니다. 잘 들리시면 테스트 끝 이라고 말씀해주세요." }],
+  on_scenario_end:   [{ speak: "오디오 루프 테스트를 마칩니다." }],
+  sub_tasks: [
+    {
+      name: "await_end",
+      success: { type: "voice_keyword", keywords: ["테스트 끝", "테스트 종료"], timeout_s: 600 },
+      on_success: [{ speak: "테스트를 종료합니다." }],
+    },
+  ],
+}
