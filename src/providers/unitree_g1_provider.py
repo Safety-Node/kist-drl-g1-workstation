@@ -38,6 +38,7 @@ from typing import Any, Callable, List, Literal, Optional, TypedDict
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image, Imu, JointState
@@ -284,7 +285,7 @@ class UnitreeG1Provider:
             _qos_be = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
                 history=HistoryPolicy.KEEP_LAST,
-                depth=1,
+                depth=10,
             )
             _qos_rel = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
@@ -297,52 +298,70 @@ class UnitreeG1Provider:
                 depth=10,
             )
 
+            # Per-subscription MutuallyExclusiveCallbackGroup — rclpy 의 기본
+            # callback group 은 노드 단일 MEC 라서, 인자 미지정 시 모든 구독이
+            # **순차 실행**돼 MultiThreadedExecutor 의 병렬성을 무효화한다.
+            # audio_pcm(50Hz) 이 Image deserialize 뒤로 밀리면 BestEffort 라
+            # depth 가 아무리 커도 stt 가 누락된 PCM 을 받게 됨. 각 구독에
+            # 전용 MEC 를 주면 executor_threads 만큼 진짜 병렬로 실행된다.
+            cb_audio = MutuallyExclusiveCallbackGroup()
+            cb_color = MutuallyExclusiveCallbackGroup()
+            cb_depth = MutuallyExclusiveCallbackGroup()
+            cb_joint = MutuallyExclusiveCallbackGroup()
+            cb_imu_base = MutuallyExclusiveCallbackGroup()
+            cb_imu_ankle_left = MutuallyExclusiveCallbackGroup()
+            cb_imu_ankle_right = MutuallyExclusiveCallbackGroup()
+            cb_uwb = MutuallyExclusiveCallbackGroup()
+            cb_buf = MutuallyExclusiveCallbackGroup()
+            cb_speaker = MutuallyExclusiveCallbackGroup()
+            cb_estop = MutuallyExclusiveCallbackGroup()
+
             # BestEffort subscribers
             self._sub_color = self._node.create_subscription(
                 CompressedImage, "/bridge/sensors/color/compressed",
-                self._on_color, _qos_be,
+                self._on_color, _qos_be, callback_group=cb_color,
             )
             self._sub_depth = self._node.create_subscription(
                 Image, "/bridge/sensors/depth/image_raw",
-                self._on_depth, _qos_be,
+                self._on_depth, _qos_be, callback_group=cb_depth,
             )
             self._sub_audio_pcm = self._node.create_subscription(
                 AudioPCM, "/bridge/sensors/audio_pcm",
-                self._on_audio_pcm, _qos_be,
+                self._on_audio_pcm, _qos_be, callback_group=cb_audio,
             )
             self._sub_joint_state = self._node.create_subscription(
                 JointState, "/bridge/sensors/joint_states",
-                self._on_joint_state, _qos_be,
+                self._on_joint_state, _qos_be, callback_group=cb_joint,
             )
             self._sub_imu_base = self._node.create_subscription(
                 Imu, "/bridge/sensors/imu",
-                self._on_imu_base, _qos_be,
+                self._on_imu_base, _qos_be, callback_group=cb_imu_base,
             )
             self._sub_imu_ankle_left = self._node.create_subscription(
                 Imu, "/bridge/sensors/imu/ankle_left",
-                self._on_imu_ankle_left, _qos_be,
+                self._on_imu_ankle_left, _qos_be, callback_group=cb_imu_ankle_left,
             )
             self._sub_imu_ankle_right = self._node.create_subscription(
                 Imu, "/bridge/sensors/imu/ankle_right",
-                self._on_imu_ankle_right, _qos_be,
+                self._on_imu_ankle_right, _qos_be, callback_group=cb_imu_ankle_right,
             )
             self._sub_uwb_pose = self._node.create_subscription(
                 PoseStamped, "/bridge/sensors/uwb_pose",
-                self._on_uwb_pose, _qos_be,
+                self._on_uwb_pose, _qos_be, callback_group=cb_uwb,
             )
 
             # Reliable subscribers
             self._sub_buf_state = self._node.create_subscription(
                 BufState, "/bridge/motor/buf_state",
-                self._on_buf_state, _qos_rel,
+                self._on_buf_state, _qos_rel, callback_group=cb_buf,
             )
             self._sub_speaker_state = self._node.create_subscription(
                 SpeakerState, "/bridge/audio/speaker_state",
-                self._on_speaker_state, _qos_rel,
+                self._on_speaker_state, _qos_rel, callback_group=cb_speaker,
             )
             self._sub_estop = self._node.create_subscription(
                 EstopFlag, "/bridge/safety/estop",
-                self._on_estop, _qos_rel,
+                self._on_estop, _qos_rel, callback_group=cb_estop,
             )
 
             # Reliable publishers

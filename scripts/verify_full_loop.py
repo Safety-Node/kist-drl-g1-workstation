@@ -40,6 +40,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+import dotenv  # noqa: E402
+dotenv.load_dotenv(dotenv_path=_ROOT / ".env")
+
 from actions.base import ActionConfig                                  # noqa: E402
 from actions.speak.connector.speak_connector import SpeakConnector     # noqa: E402
 from backgrounds.plugins.task_srv_bg import TaskSrvBg, TaskSrvBgConfig # noqa: E402
@@ -113,7 +116,7 @@ class CycleProbe:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", default="audio_loop_test",
+    ap.add_argument("--scenario", default="audio_loop_test.json5",
                     help="config/scenarios/<이름>.json5 (기본: audio_loop_test)")
     args = ap.parse_args()
 
@@ -138,6 +141,13 @@ def main() -> int:
     _orig_activate = task_srv._activate
     _orig_synth = tts.synthesize
     _orig_publish = g1.publish_audio_out
+    _orig_stt_chunk = stt._on_audio_chunk        # T0 진단: 마이크 청크가 STT 에 도달하는지
+
+    # T0 진단용 카운터 (오디오가 실제로 STT 에 흘러들어오는지 확인). 첫 청크는
+    # 즉시 로그, 이후 100청크(~2s)마다 한 번씩 누적값을 출력. transcript 가 안
+    # 보일 때 이 로그가 0이면 오디오 경로(comm_bridge/G1 sub) 문제, 늘어나는
+    # 데 transcript 가 없으면 STT/Google 문제로 좁힐 수 있다.
+    _stt_chunk_count = {"n": 0}
 
     def _p_on_audio(text, ts=None):
         probe.mark("T2_on_audio")
@@ -155,10 +165,20 @@ def main() -> int:
         probe.mark("T4_publish")
         return _orig_publish(pcm)
 
+    def _p_stt_chunk(pcm, ts):
+        n = _stt_chunk_count["n"] + 1
+        _stt_chunk_count["n"] = n
+        if n == 1:
+            logging.info("T0 STT first audio chunk: %d bytes (audio path OK)", len(pcm))
+        elif n % 100 == 0:
+            logging.info("T0 STT chunks received: %d", n)
+        return _orig_stt_chunk(pcm, ts)
+
     task_srv.on_audio = _p_on_audio              # type: ignore[assignment]
     task_srv._activate = _p_activate             # type: ignore[assignment]
     tts.synthesize = _p_synth                    # type: ignore[assignment]
     g1.publish_audio_out = _p_publish            # type: ignore[assignment]
+    stt._on_audio_chunk = _p_stt_chunk           # type: ignore[assignment]
 
     # ── 기동 (run.py 의존 순서: providers → task_srv → bg → sound_sensor) ─
     stop_event = threading.Event()
