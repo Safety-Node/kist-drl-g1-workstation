@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections import deque
 from typing import Tuple
 
 import numpy as np
-
-_DIRS8 = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+from scipy.ndimage import distance_transform_cdt
 
 
 def inflate_costmap(grid,
@@ -13,44 +11,28 @@ def inflate_costmap(grid,
                     obs_cost:   float,
                     decay_rate: float) -> np.ndarray:
     """
-    OccupancyGrid → BFS inflation → float32 traversal cost array.
+    OccupancyGrid → scipy distance transform → float32 traversal cost array.
 
-    A free cell at BFS distance d (1-indexed) from the nearest obstacle
-    is assigned total cost:
-        cell_cost = obs_cost × (1 - decay_rate)^d
-    Propagation stops when cell_cost falls to base_cost or below.
+    Chessboard (8-connected) distance d from nearest obstacle:
+        cell_cost = max(base_cost, obs_cost × (1 - decay_rate)^d)
+    Obstacle cells keep obs_cost (d=0 → factor^0 = 1).
     """
     info = grid.info
     h, w = int(info.height), int(info.width)
     obs  = np.frombuffer(bytes(grid.data), dtype=np.int8).reshape(h, w)
 
-    cost = np.full((h, w), float(base_cost), dtype=np.float32)
-    cost[obs == 100] = obs_cost
+    obs_mask = obs == 100
 
-    if decay_rate <= 0 or decay_rate >= 1:
+    if decay_rate <= 0.0 or decay_rate >= 1.0:
+        cost = np.full((h, w), float(base_cost), dtype=np.float32)
+        cost[obs_mask] = float(obs_cost)
         return cost
 
-    factor  = 1.0 - decay_rate
-    visited = (obs == 100).copy()
-    queue   = deque()
-    for r, c in zip(*np.where(obs == 100)):
-        queue.append((int(r), int(c), obs_cost * factor))
-
-    while queue:
-        r, c, cell_cost = queue.popleft()
-        if cell_cost <= base_cost:
-            continue
-        for dr, dc in _DIRS8:
-            nr, nc = r + dr, c + dc
-            if not (0 <= nr < h and 0 <= nc < w):
-                continue
-            if visited[nr, nc]:
-                continue
-            visited[nr, nc] = True
-            if obs[nr, nc] != 100:
-                cost[nr, nc] = cell_cost
-            queue.append((nr, nc, cell_cost * factor))
-
+    dist = distance_transform_cdt(~obs_mask, metric='chessboard').astype(np.float32)
+    cost = np.maximum(
+        float(base_cost),
+        float(obs_cost) * ((1.0 - float(decay_rate)) ** dist),
+    ).astype(np.float32)
     return cost
 
 

@@ -407,7 +407,7 @@ class NavigationProvider:
         best_idx  = 0
         best_dist = float('inf')
         for i, (r, c) in enumerate(path):
-            px, py = _c2m(grid, r, c)
+            px, py = c2m(grid, r, c)
             d = (px - rx)**2 + (py - ry)**2
             if d < best_dist:
                 best_dist = d
