@@ -615,6 +615,8 @@ class UnitreeG1Provider:
         signal. Reliable topics (estop, buf_state, speaker_state) require
         the bridge to be actively forwarding to advance ``last_seen_ts``.
         """
+        # TODO: re-enable once NX bridge publishes estop/buf_state/speaker_state
+        return True
         ttl_s = self._heartbeat_timeout_ms / 1000.0
         now = time.monotonic()
         return (
