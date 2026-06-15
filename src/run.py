@@ -37,7 +37,7 @@ from backgrounds.base import Background
 from backgrounds.plugins.gui_background import GUIBackground, GUIBackgroundConfig
 from backgrounds.plugins.task_srv_bg import TaskSrvBg, TaskSrvBgConfig
 from inputs.plugins.sound_sensor import SoundSensor, SoundSensorConfig
-from providers.navigation_provider import NavigationProvider, NavigationProviderConfig
+from providers.navigation_provider import NavigationProvider
 from providers.stt_provider import STTConfig, STTProvider
 from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider
 from providers.tts_provider import TTSConfig, TTSProvider
@@ -87,7 +87,7 @@ def _build_runtime(scenario_file: Optional[str] = None) -> _Runtime:
     stt = STTProvider(STTConfig())
     tts = TTSProvider(TTSConfig())
     vla = VLAProvider(VLAConfig())
-    navigation = NavigationProvider(NavigationProviderConfig())  # loco split off VLA
+    navigation = NavigationProvider()  # config loaded from providers/config/navigation/config.yaml
     rt.providers = [unitree_g1, stt, tts, vla, navigation]
 
     # Connectors: stateless adapters; their __init__ fetches provider singletons.
