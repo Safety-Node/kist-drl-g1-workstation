@@ -14,7 +14,7 @@ gains:
   kp_yaw: 1.5               # P-gain for heading alignment (1/s)
 
 arrival:
-  tol: 0.25                 # m — goal reached when dist < this
+  tol: 0.50                 # m — goal reached when dist < this
 
 path:
   lookahead_cells: 20       # cells ahead on path to track (~1.0 m at 0.05 m/cell)

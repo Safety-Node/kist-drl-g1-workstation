@@ -327,12 +327,16 @@ class NavigationProvider:
         if need_plan and not occ_cache.stale(now, 0.5) and occ_cache.value is not None:
             self._do_plan(occ_cache.value, rx, ry, gx, gy, goal)
 
-        # Drive toward lookahead target (or direct to goal if no path)
-        if self._path is not None and self._path_grid is not None:
-            tx, ty = self._get_lookahead_target(rx, ry)
-        else:
-            tx, ty = gx, gy   # fallback: aim straight at goal
+        # Drive toward lookahead target — stop if no path available
+        if self._path is None or self._path_grid is None:
+            self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
+            self._set_state(NavigationState(
+                t_monotonic=now, mode="PLANNING",
+                goal_id=goal_id, dist_to_goal=dist,
+            ))
+            return
 
+        tx, ty = self._get_lookahead_target(rx, ry)
         dx_t = tx - rx
         dy_t = ty - ry
         td   = math.sqrt(dx_t * dx_t + dy_t * dy_t)
