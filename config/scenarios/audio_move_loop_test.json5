@@ -1,0 +1,76 @@
+// audio_move_loop_test — verify_full_move_loop.py 전용 검증 시나리오.
+//
+// 음성-keyword → MoveConnector(wrap) → UnitreeG1.publish_twist → NX
+// motor_controller LocoClient.Move(vx,vy,vyaw) 까지 검증.
+// move_test.json5 (1차시연) 가 nav 경로를 쓰지만 NavigationProvider 가
+// NotImplementedError 라 막힘 — 본 시나리오는 verify 스크립트에서 wrap 한
+// "twist" 프롬프트 형식을 사용해 publish_twist 로 직접 보낸다.
+//
+// 프롬프트 문법 (verify_full_move_loop.py 가 인식):
+//     "twist vx=<m/s> vy=<m/s> vyaw=<rad/s> duration=<s>"
+//   - 명시 안 한 필드는 0. duration 동안 10Hz 로 publish, 끝나면 zero twist.
+//
+// 전제: 로봇이 "BalanceStand" 자세에 있어야 LocoClient.Move 가 받음.
+//      필요하면 별도로 stand up 명령을 먼저 보내거나, 운영자가 수동으로 세움.
+//
+// success criterion: twist publish 완료 polling 신호가 깨끗하지 않아 delay 사용.
+{
+  name: "audio_move_loop_test",
+  triggers: ["이동 테스트 시작", "이동 테스트"],
+  exit_keywords: ["시연 끝", "그만"],
+  on_scenario_start: [{ speak: "이동 테스트를 시작합니다. 앞으로, 뒤로, 왼쪽으로 돌아, 오른쪽으로 돌아 라고 말씀해주세요." }],
+  on_scenario_end:   [{ speak: "이동 테스트를 마칩니다." }],
+  sub_tasks: [
+    // ── 앞으로 ──────────────────────────────────────────────────
+    {
+      name: "await_forward",
+      success: { type: "voice_keyword", keywords: ["앞으로", "전진"], timeout_s: 300 },
+    },
+    {
+      name: "do_forward",
+      on_create: [{ speak: "앞으로 걷습니다." }],
+      on_start:  [{ move: "twist vx=0.2 duration=2.0", delay: 0.3 }],
+      success: { type: "delay", seconds: 3.0, timeout_s: 10.0 },
+      on_success: [{ speak: "앞으로 이동했습니다." }],
+    },
+
+    // ── 뒤로 ────────────────────────────────────────────────────
+    {
+      name: "await_backward",
+      success: { type: "voice_keyword", keywords: ["뒤로", "후진"], timeout_s: 300 },
+    },
+    {
+      name: "do_backward",
+      on_create: [{ speak: "뒤로 걷습니다." }],
+      on_start:  [{ move: "twist vx=-0.15 duration=2.0", delay: 0.3 }],
+      success: { type: "delay", seconds: 3.0, timeout_s: 10.0 },
+      on_success: [{ speak: "뒤로 이동했습니다." }],
+    },
+
+    // ── 왼쪽 회전 ────────────────────────────────────────────────
+    {
+      name: "await_yaw_left",
+      success: { type: "voice_keyword", keywords: ["왼쪽으로 돌아", "왼쪽 회전", "좌회전"], timeout_s: 300 },
+    },
+    {
+      name: "do_yaw_left",
+      on_create: [{ speak: "왼쪽으로 회전합니다." }],
+      on_start:  [{ move: "twist vyaw=0.3 duration=2.0", delay: 0.3 }],
+      success: { type: "delay", seconds: 3.0, timeout_s: 10.0 },
+      on_success: [{ speak: "왼쪽 회전을 마쳤습니다." }],
+    },
+
+    // ── 오른쪽 회전 ──────────────────────────────────────────────
+    {
+      name: "await_yaw_right",
+      success: { type: "voice_keyword", keywords: ["오른쪽으로 돌아", "오른쪽 회전", "우회전"], timeout_s: 300 },
+    },
+    {
+      name: "do_yaw_right",
+      on_create: [{ speak: "오른쪽으로 회전합니다." }],
+      on_start:  [{ move: "twist vyaw=-0.3 duration=2.0", delay: 0.3 }],
+      success: { type: "delay", seconds: 3.0, timeout_s: 10.0 },
+      on_success: [{ speak: "오른쪽 회전을 마쳤습니다." }],
+    },
+  ],
+}
