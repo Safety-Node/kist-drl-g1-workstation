@@ -1,0 +1,33 @@
+# NavigationProvider runtime configuration
+# Loaded by NavigationProvider.__init__ via NavigationProviderConfig.
+
+control:
+  rate_hz: 20.0             # control loop frequency
+  pose_timeout_s: 0.5       # stop if pose is stale longer than this
+
+speed:
+  max_speed: 0.5            # m/s — translational cap (body frame)
+  max_vyaw: 0.8             # rad/s — yaw rate cap
+
+gains:
+  kp_xy: 0.8                # P-gain for goal attraction (1/s)
+  kp_yaw: 1.5               # P-gain for heading alignment (1/s)
+
+arrival:
+  tol: 0.50                 # m — goal reached when dist < this
+
+path:
+  lookahead_cells: 20       # cells ahead on path to track (~1.0 m at 0.05 m/cell)
+  planner_rate_hz: 20.0     # route re-plan frequency (Hz)
+  astar_weight: 1.0         # f = g + w*h  (1.0=optimal, >1.0 suppresses detours)
+
+costmap:
+  base_cost: 1              # traversal cost of a free cell
+  obs_cost: 9999            # traversal cost of an obstacle cell (impassable)
+  decay_rate: 0.6           # fraction reduced per BFS step from obs_cost
+                            # cell_cost = obs_cost × (1 - decay_rate)^distance
+                            # e.g. obs_cost=9999, decay_rate=0.3:
+                            #   distance 1→6999, 2→4899, 3→3430, ...
+                            #   stops when cost falls to base_cost
+
+locations_file: "src/providers/config/navigation/locations.json5"

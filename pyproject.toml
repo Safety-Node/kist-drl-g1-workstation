@@ -7,6 +7,7 @@ requires-python = ">=3.10,<3.11"
 dependencies = [
     # Core OM1 framework (still used by our mini-runner)
     "json5==0.10.0",
+    "pyyaml>=6.0",
     "jsonschema==4.23.0",
     "pydantic>=2",
     "python-dotenv==1.2.2",
@@ -41,6 +42,8 @@ dependencies = [
     "openai==1.60.1",
     "typer==0.15.1",                # OM1 cli.py / scripts/generate_schema.py
     "google-cloud-speech>=2.21.0",
+    "scipy>=1.15.3",
+    "scikit-image>=0.25.2",
 ]
 
 [project.optional-dependencies]

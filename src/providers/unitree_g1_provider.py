@@ -38,6 +38,7 @@ from typing import Any, Callable, List, Literal, Optional, TypedDict
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import OccupancyGrid
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -209,6 +210,8 @@ class UnitreeG1Provider:
         self._imu_ankle_left: TopicCache = TopicCache()
         self._imu_ankle_right: TopicCache = TopicCache()
         self._uwb_pose: TopicCache = TopicCache()
+        self._location: TopicCache = TopicCache()
+        self._occupancy: TopicCache = TopicCache()
 
         # State topic caches (Reliable)
         self._buf_state: TopicCache = TopicCache()
@@ -224,6 +227,8 @@ class UnitreeG1Provider:
         self._sub_imu_ankle_left = None
         self._sub_imu_ankle_right = None
         self._sub_uwb_pose = None
+        self._sub_location = None
+        self._sub_occupancy = None
         self._sub_buf_state = None
         self._sub_speaker_state = None
         self._sub_estop = None
@@ -312,6 +317,8 @@ class UnitreeG1Provider:
             cb_imu_ankle_left = MutuallyExclusiveCallbackGroup()
             cb_imu_ankle_right = MutuallyExclusiveCallbackGroup()
             cb_uwb = MutuallyExclusiveCallbackGroup()
+            cb_location = MutuallyExclusiveCallbackGroup()
+            cb_occupancy = MutuallyExclusiveCallbackGroup()
             cb_buf = MutuallyExclusiveCallbackGroup()
             cb_speaker = MutuallyExclusiveCallbackGroup()
             cb_estop = MutuallyExclusiveCallbackGroup()
@@ -348,6 +355,14 @@ class UnitreeG1Provider:
             self._sub_uwb_pose = self._node.create_subscription(
                 PoseStamped, "/bridge/sensors/uwb_pose",
                 self._on_uwb_pose, _qos_be, callback_group=cb_uwb,
+            )
+            self._sub_location = self._node.create_subscription(
+                PoseStamped, "/bridge/sensors/location",
+                self._on_location, _qos_be, callback_group=cb_location,
+            )
+            self._sub_occupancy = self._node.create_subscription(
+                OccupancyGrid, "/bridge/sensors/lidar/occupancy",
+                self._on_occupancy, _qos_be, callback_group=cb_occupancy,
             )
 
             # Reliable subscribers
@@ -473,6 +488,12 @@ class UnitreeG1Provider:
             except Exception:
                 logging.exception("UnitreeG1Provider: estop callback error")
 
+    def _on_location(self, msg: PoseStamped) -> None:
+        self._location = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
+    def _on_occupancy(self, msg: OccupancyGrid) -> None:
+        self._occupancy = TopicCache(value=msg, last_seen_ts=time.monotonic())
+
     # ------------------------------------------------------------------
     # Sensor data properties (BestEffort, sensor_ttl_ms)
     # ------------------------------------------------------------------
@@ -515,6 +536,16 @@ class UnitreeG1Provider:
     def uwb_pose(self) -> TopicCache:
         """Latest ``/bridge/sensors/uwb_pose`` — TaskSrvProvider locomotion sub-task success."""
         return self._uwb_pose
+
+    @property
+    def location(self) -> TopicCache:
+        """Latest ``/bridge/sensors/location`` — EKF-fused pose (PoseStamped, map frame)."""
+        return self._location
+
+    @property
+    def occupancy(self) -> TopicCache:
+        """Latest ``/bridge/sensors/lidar/occupancy`` — 2D obstacle grid (OccupancyGrid)."""
+        return self._occupancy
 
     # ------------------------------------------------------------------
     # State properties (Reliable, state_ttl_ms)
