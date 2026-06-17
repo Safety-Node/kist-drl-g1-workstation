@@ -182,7 +182,7 @@ def main() -> int:
         return _orig_stt_chunk(pcm, ts)
 
     # --local: bypass _connected / comm_bridge_alive guards and publish directly to DDS.
-    # speaker_player.py subscribes to /bridge/cmd/audio_out and plays via paplay.
+    # spk_subscriber.py subscribes to /bridge/cmd/audio_out and plays via paplay.
     # _pub_local is created after g1.start() (g1._node is None before start).
     _pub_local = None
 

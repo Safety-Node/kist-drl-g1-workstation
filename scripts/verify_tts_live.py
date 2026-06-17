@@ -37,6 +37,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+import os
+os.environ.pop("CYCLONEDDS_URI", None)
+
 import dotenv
 dotenv.load_dotenv(dotenv_path=_ROOT / ".env")
 

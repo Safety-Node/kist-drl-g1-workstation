@@ -17,6 +17,7 @@ AGC/노이즈게이트 진단, 주파수별 노이즈 파악 등에 사용.
 """
 
 import argparse
+import os
 import threading
 import time
 from collections import deque
@@ -26,6 +27,8 @@ import sys
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
+
+os.environ.pop("CYCLONEDDS_URI", None)
 
 import numpy as np
 import rclpy

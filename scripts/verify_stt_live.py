@@ -37,6 +37,9 @@ def main() -> int:
     ap.add_argument("--lang", default="ko-KR")
     ap.add_argument("--local", action="store_true",
                     help="로봇 없이 로컬 mic_publisher 와 함께 실행. eno2 CycloneDDS 설정 무시.")
+    ap.add_argument("--topic", default="/bridge/sensors/audio_pcm",
+                    help="오디오 입력 토픽 (기본: /bridge/sensors/audio_pcm). "
+                         "예: /bridge/sensors/audio_pcm_filtered")
     args = ap.parse_args()
 
     if args.local:
@@ -54,7 +57,7 @@ def main() -> int:
     UnitreeG1Provider.reset()
     STTProvider.reset()
 
-    g1  = UnitreeG1Provider()
+    g1  = UnitreeG1Provider(audio_pcm_topic=args.topic)
     stt = STTProvider(STTConfig(
         backend=backend,
         language_code=args.lang,

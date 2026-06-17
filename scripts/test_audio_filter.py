@@ -24,6 +24,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+import os
+os.environ.pop("CYCLONEDDS_URI", None)
+
 from providers.stt_provider import StreamingSpeechFilter
 
 import rclpy
