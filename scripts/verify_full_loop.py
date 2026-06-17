@@ -12,7 +12,7 @@ verify_tts_live 와 달리, 이 스크립트는 run.py 와 동일한 **정식 �
     T2b 시나리오 trigger 매칭/활성  (probe: _activate wrapper)
     T3  TTS synthesize 진입        (probe: synthesize wrapper)
     T4  PCM publish(audio_out)     (probe: publish_audio_out wrapper)
-    T5  speaker playing=True       (probe: g1.speaker_state 폴링)
+    T5  speaker playing=True       (probe: g1.speaker_state 폴링, --local 시 T4=T5)
 구간 의미는 docs/VERIFY_FULL_LOOP_TIMING.md 다이어그램 참조.
 
 probe 는 전부 "원본 호출을 그대로 통과시키는 측정 래퍼" — 동작 변경 없음.
@@ -24,12 +24,18 @@ probe 는 전부 "원본 호출을 그대로 통과시키는 측정 래퍼" — 
 실행 (desktop, repo root):
     uv run python scripts/verify_full_loop.py
     uv run python scripts/verify_full_loop.py --scenario audio_loop_test
-사용법: 실행 후 마이크에 "오디오 테스트" → 로봇이 응답하면 cycle 1 성공.
-        "테스트 끝" → 응답 + 시나리오 종료(cycle 2). Ctrl-C 로 종료.
+    uv run python scripts/verify_full_loop.py --local    # 로봇 없이 로컬 mic+speaker 사용
+
+--local 모드:
+    - CycloneDDS eno2 설정 무시 (loopback DDS)
+    - mic_publisher.py --device 11 으로 오디오 입력 제공 (별도 터미널)
+    - TTS 출력을 AB13X USB Audio (device 12) 로 로컬 재생 (NX 스피커 불필요)
+    - T5 speaker_state 폴링 스킵 (T4 시점에 즉시 요약)
 """
 
 import argparse
 import logging
+import os
 import sys
 import threading
 import time
@@ -118,7 +124,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="audio_loop_test.json5",
                     help="config/scenarios/<이름>.json5 (기본: audio_loop_test)")
+    ap.add_argument("--local", action="store_true",
+                    help="로봇 없이 로컬 마이크(mic_publisher)+스피커(AB13X) 로 full-loop 테스트")
     args = ap.parse_args()
+
+    if args.local:
+        os.environ.pop("CYCLONEDDS_URI", None)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -161,10 +172,6 @@ def main() -> int:
         probe.mark("T3_synthesize")
         return await _orig_synth(text)
 
-    def _p_publish(pcm):
-        probe.mark("T4_publish")
-        return _orig_publish(pcm)
-
     def _p_stt_chunk(pcm, ts):
         n = _stt_chunk_count["n"] + 1
         _stt_chunk_count["n"] = n
@@ -173,6 +180,29 @@ def main() -> int:
         elif n % 100 == 0:
             logging.info("T0 STT chunks received: %d", n)
         return _orig_stt_chunk(pcm, ts)
+
+    # --local: bypass _connected / comm_bridge_alive guards and publish directly to DDS.
+    # speaker_player.py subscribes to /bridge/cmd/audio_out and plays via paplay.
+    # _pub_local is created after g1.start() (g1._node is None before start).
+    _pub_local = None
+
+    def _p_publish(pcm: bytes) -> None:
+        probe.mark("T4_publish")
+        if not pcm:
+            return
+        if args.local:
+            if _pub_local is None:
+                logging.warning("_pub_local not ready yet, dropping audio_out")
+                return
+            from g1_onboard_msgs.msg import AudioPCM as _AudioPCM
+            msg = _AudioPCM()
+            msg.sample_rate = 16000
+            msg.channels    = 1
+            msg.bit_depth   = 16
+            msg.data        = list(pcm)
+            _pub_local.publish(msg)
+        else:
+            return _orig_publish(pcm)
 
     task_srv.on_audio = _p_on_audio              # type: ignore[assignment]
     task_srv._activate = _p_activate             # type: ignore[assignment]
@@ -183,6 +213,19 @@ def main() -> int:
     # ── 기동 (run.py 의존 순서: providers → task_srv → bg → sound_sensor) ─
     stop_event = threading.Event()
     g1.start()
+
+    if args.local:
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+        from g1_onboard_msgs.msg import AudioPCM as _AudioPCM
+        _qos_rel = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        _pub_local = g1._node.create_publisher(  # type: ignore[attr-defined]
+            _AudioPCM, "/bridge/cmd/audio_out", _qos_rel
+        )
+
     stt.start()
     tts.start()
 
@@ -210,23 +253,35 @@ def main() -> int:
     stt.register_transcript_callback(_on_transcript)
     sound_sensor.start()
 
-    logging.info("full loop ready (scenario=%s) — 마이크에 \"오디오 테스트\" 라고 말하세요. "
-                 "Ctrl-C 종료.", args.scenario)
+    if args.local:
+        logging.info(
+            "full loop ready [LOCAL] (scenario=%s) — "
+            "mic_publisher.py --device 11 을 별도 터미널에서 실행 후 \"오디오 테스트\" 라고 말하세요. "
+            "TTS 출력: AB13X (device 12). Ctrl-C 종료.", args.scenario)
+    else:
+        logging.info("full loop ready (scenario=%s) — 마이크에 \"오디오 테스트\" 라고 말하세요. "
+                     "Ctrl-C 종료.", args.scenario)
 
     # ── 메인 루프: T5(speaker playing) 폴링 + 사이클 요약 ─────────────────
     try:
         while True:
             time.sleep(0.02)
-            # T5: g1 이 구독한 speaker_state 캐시에서 playing 전이 감지
-            if probe.has("T4_publish") and not probe.has("T5_playing"):
-                sv = getattr(g1.speaker_state, "value", None)
-                if sv is not None and bool(getattr(sv, "playing", False)):
+            if args.local:
+                # T5 없음 — T4 직후 바로 요약 (재생은 로컬 thread 에서 비동기)
+                if probe.has("T4_publish") and not probe.has("T5_playing"):
                     probe.mark("T5_playing")
                     probe.summarize()
-                else:
-                    age = probe.t4_age()
-                    if age is not None and age > T5_TIMEOUT_S:
-                        probe.summarize(t5_missing=True)
+            else:
+                # T5: g1 이 구독한 speaker_state 캐시에서 playing 전이 감지
+                if probe.has("T4_publish") and not probe.has("T5_playing"):
+                    sv = getattr(g1.speaker_state, "value", None)
+                    if sv is not None and bool(getattr(sv, "playing", False)):
+                        probe.mark("T5_playing")
+                        probe.summarize()
+                    else:
+                        age = probe.t4_age()
+                        if age is not None and age > T5_TIMEOUT_S:
+                            probe.summarize(t5_missing=True)
     except KeyboardInterrupt:
         pass
     finally:

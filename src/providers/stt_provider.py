@@ -57,9 +57,9 @@ class StreamingSpeechFilter:
         self._sos = np.vstack([hp_sos, lp_sos])
         self._zi  = np.zeros((self._sos.shape[0], 2), dtype=np.float64)
 
-    def process(self, samples: np.ndarray) -> np.ndarray:
+    def process(self, samples: np.ndarray, gain_linear: float = 1.0) -> np.ndarray:
         y, self._zi = sosfilt(self._sos, samples.astype(np.float64), zi=self._zi)
-        return np.clip(np.rint(y), -32768, 32767).astype(np.int16)
+        return np.clip(np.rint(y * gain_linear), -32768, 32767).astype(np.int16)
 
 
 class STTBackend(str, Enum):
@@ -112,7 +112,10 @@ class STTConfig:
     interim_results: bool = False
     # Speech band IIR filter (HPF + LPF). Set to 0.0 to disable.
     highpass_hz: float = 120.0   # Hz — removes low-freq vibration / DC
-    lowpass_hz: float  = 3800.0  # Hz — removes broadband noise above speech band
+    lowpass_hz: float  = 5500.0  # Hz — preserves Korean fricatives (ㅅ/ㅎ/ㅊ up to ~6kHz)
+    # Input gain applied after filtering. Positive = amplify quiet mic.
+    # +6 dB ≈ ×2 amplitude, +12 dB ≈ ×4. Clips to int16 range.
+    input_gain_db: float = 0.0   # gain 없음 — 노이즈 환경에서 증폭은 역효과
     # Drop mic input N ms AFTER speaker_state.playing clears (trailing echo).
     echo_cancel_tail_ms: int = 200
     # Drop mic input N ms BEFORE speaker_state.playing rises (leading edge):
@@ -150,6 +153,7 @@ class STTProvider:
             highpass_hz=self._config.highpass_hz,
             lowpass_hz=self._config.lowpass_hz,
         )
+        self._gain_linear = 10.0 ** (self._config.input_gain_db / 20.0)
 
         # Backend worker state
         self._audio_queue: Optional[queue.Queue] = None
@@ -342,7 +346,7 @@ class STTProvider:
         if self._audio_queue is not None:
             try:
                 samples  = np.frombuffer(pcm, dtype=np.int16)
-                filtered = self._speech_filter.process(samples)
+                filtered = self._speech_filter.process(samples, self._gain_linear)
                 self._audio_queue.put_nowait(filtered.tobytes())
             except queue.Full:
                 logging.debug("STTProvider: audio queue full, dropping chunk")
@@ -386,6 +390,22 @@ class STTProvider:
                 logging.exception("STTProvider: transcript callback raised")
 
     # ------------------------------------------------------------------
+    # Queue helpers
+    # ------------------------------------------------------------------
+    def _drain_audio_queue(self) -> int:
+        """재연결 전 쌓인 stale 오디오를 모두 버린다. 버린 청크 수를 반환."""
+        dropped = 0
+        if self._audio_queue is None:
+            return dropped
+        while True:
+            try:
+                self._audio_queue.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                break
+        return dropped
+
+    # ------------------------------------------------------------------
     # Google Cloud STT backend
     # ------------------------------------------------------------------
     def _google_request_gen(self):
@@ -401,7 +421,7 @@ class STTProvider:
 
         while not self._stop_event.is_set():
             try:
-                chunk = self._audio_queue.get(timeout=0.1)
+                chunk = self._audio_queue.get(timeout=0.02)
             except queue.Empty:
                 continue
             if chunk is None:  # poison pill from stop()
@@ -420,6 +440,20 @@ class STTProvider:
             self._state = STTState.FAILED
             return
 
+        # SpeechClient 한 번만 생성 — gRPC 채널 재사용.
+        # 에러로 client 자체가 망가진 경우에만 재생성.
+        client = speech.SpeechClient()
+        recognition_config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=self._config.sample_rate_hz,
+            language_code=self._config.language_code,
+            enable_automatic_punctuation=True,
+        )
+        streaming_config = speech.StreamingRecognitionConfig(
+            config=recognition_config,
+            interim_results=self._config.interim_results,
+        )
+
         reconnect_count = 0
         backoff = 1.0
 
@@ -433,19 +467,6 @@ class STTProvider:
                 break
 
             try:
-                client = speech.SpeechClient()
-                recognition_config = speech.RecognitionConfig(
-                    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=self._config.sample_rate_hz,
-                    language_code=self._config.language_code,
-                    enable_automatic_punctuation=True,
-                )
-                streaming_config = speech.StreamingRecognitionConfig(
-                    config=recognition_config,
-                    interim_results=self._config.interim_results,
-                    single_utterance=True,
-                )
-
                 if reconnect_count == 0:
                     logging.info("STTProvider: Google streaming session started")
                 else:
@@ -477,15 +498,20 @@ class STTProvider:
                                 confidence=confidence,
                             ))
 
-                # Stream ended normally (~5 min rotation): reset and reconnect
+                # Stream ended normally (single_utterance or ~5 min rotation)
                 if not self._stop_event.is_set():
-                    logging.info("STTProvider: Google stream ended normally, restarting")
+                    dropped = self._drain_audio_queue()
+                    logging.info(
+                        "STTProvider: Google stream ended, restarting (flushed %d stale chunks)",
+                        dropped,
+                    )
                     reconnect_count = 0
                     backoff = 1.0
 
             except Exception as exc:
                 if self._stop_event.is_set():
                     break
+                self._drain_audio_queue()
                 reconnect_count += 1
                 logging.warning(
                     "STTProvider: Google stream error (%s) — retry %d/%d in %.1fs",
@@ -493,6 +519,11 @@ class STTProvider:
                 )
                 self._stop_event.wait(timeout=backoff)
                 backoff = min(backoff * 2, 30.0)
+                # gRPC 채널 수준 에러면 client 재생성
+                try:
+                    client = speech.SpeechClient()
+                except Exception:
+                    pass
 
         if self._state != STTState.FAILED:
             self._state = STTState.IDLE

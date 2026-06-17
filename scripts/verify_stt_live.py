@@ -11,10 +11,12 @@ STTProvider 가 register_audio_callback() 으로 fan-out 받는다.
 실행:
     uv run python scripts/verify_stt_live.py
     uv run python scripts/verify_stt_live.py --backend dummy
+    uv run python scripts/verify_stt_live.py --local          # 로봇 없이 로컬 마이크 테스트
 """
 
 import argparse
 import logging
+import os
 import statistics
 import sys
 import time
@@ -33,7 +35,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["google", "dummy"], default="google")
     ap.add_argument("--lang", default="ko-KR")
+    ap.add_argument("--local", action="store_true",
+                    help="로봇 없이 로컬 mic_publisher 와 함께 실행. eno2 CycloneDDS 설정 무시.")
     args = ap.parse_args()
+
+    if args.local:
+        os.environ.pop("CYCLONEDDS_URI", None)
 
     logging.basicConfig(
         level=logging.INFO,
