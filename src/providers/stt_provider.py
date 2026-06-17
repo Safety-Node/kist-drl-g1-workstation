@@ -30,10 +30,36 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, List, Optional
 
+import numpy as np
+from scipy.signal import butter, sosfilt
+
 from .singleton import singleton
 from .unitree_g1_provider import UnitreeG1Provider
 
 _MAX_RECONNECT = 10
+
+
+class StreamingSpeechFilter:
+    """청크 경계를 넘어 zi 상태를 유지하는 실시간 IIR 대역 필터.
+
+    HPF(120 Hz, Butterworth 4차) + LPF(3800 Hz, Butterworth 6차) 직렬 구성.
+    저주파 진동·DC 및 4 kHz 이상 광대역 노이즈를 제거하고 음성 대역을 보존한다.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        highpass_hz: float = 120.0,
+        lowpass_hz: float = 3800.0,
+    ) -> None:
+        hp_sos = butter(4, highpass_hz, btype="highpass", fs=sample_rate, output="sos")
+        lp_sos = butter(6, lowpass_hz,  btype="lowpass",  fs=sample_rate, output="sos")
+        self._sos = np.vstack([hp_sos, lp_sos])
+        self._zi  = np.zeros((self._sos.shape[0], 2), dtype=np.float64)
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        y, self._zi = sosfilt(self._sos, samples.astype(np.float64), zi=self._zi)
+        return np.clip(np.rint(y), -32768, 32767).astype(np.int16)
 
 
 class STTBackend(str, Enum):
@@ -84,6 +110,9 @@ class STTConfig:
     # when False, only is_final=True events are emitted to subscribers
     # (SoundSensor / GUI etc.). Downstream code does not re-filter.
     interim_results: bool = False
+    # Speech band IIR filter (HPF + LPF). Set to 0.0 to disable.
+    highpass_hz: float = 120.0   # Hz — removes low-freq vibration / DC
+    lowpass_hz: float  = 3800.0  # Hz — removes broadband noise above speech band
     # Drop mic input N ms AFTER speaker_state.playing clears (trailing echo).
     echo_cancel_tail_ms: int = 200
     # Drop mic input N ms BEFORE speaker_state.playing rises (leading edge):
@@ -114,6 +143,13 @@ class STTProvider:
         self._estop_active: bool = False
         self._echo_tail_end: Optional[float] = None   # monotonic tail deadline
         self._lead_mute_end: Optional[float] = None   # monotonic lead deadline
+
+        # Speech band filter (HPF + LPF) — applied to every real audio chunk
+        self._speech_filter = StreamingSpeechFilter(
+            sample_rate=self._config.sample_rate_hz,
+            highpass_hz=self._config.highpass_hz,
+            lowpass_hz=self._config.lowpass_hz,
+        )
 
         # Backend worker state
         self._audio_queue: Optional[queue.Queue] = None
@@ -302,10 +338,12 @@ class STTProvider:
                     pass
             return
 
-        # ③ Feed real audio to backend queue
+        # ③ Apply speech filter then feed to backend queue
         if self._audio_queue is not None:
             try:
-                self._audio_queue.put_nowait(pcm)
+                samples  = np.frombuffer(pcm, dtype=np.int16)
+                filtered = self._speech_filter.process(samples)
+                self._audio_queue.put_nowait(filtered.tobytes())
             except queue.Full:
                 logging.debug("STTProvider: audio queue full, dropping chunk")
 
@@ -405,6 +443,7 @@ class STTProvider:
                 streaming_config = speech.StreamingRecognitionConfig(
                     config=recognition_config,
                     interim_results=self._config.interim_results,
+                    single_utterance=True,
                 )
 
                 if reconnect_count == 0:
