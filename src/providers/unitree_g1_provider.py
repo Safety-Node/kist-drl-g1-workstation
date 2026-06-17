@@ -366,6 +366,14 @@ class UnitreeG1Provider:
                 OccupancyGrid, "/bridge/sensors/lidar/occupancy",
                 self._on_occupancy, _qos_be, callback_group=cb_occupancy,
             )
+            self._sub_location = self._node.create_subscription(
+                PoseStamped, "/bridge/sensors/location",
+                self._on_location, _qos_be,
+            )
+            self._sub_occupancy = self._node.create_subscription(
+                OccupancyGrid, "/bridge/sensors/lidar/occupancy",
+                self._on_occupancy, _qos_be,
+            )
 
             # Reliable subscribers
             self._sub_buf_state = self._node.create_subscription(
