@@ -6,7 +6,7 @@ control:
   pose_timeout_s: 0.5       # stop if pose is stale longer than this
 
 speed:
-  max_speed: 0.5            # m/s — translational cap (body frame)
+  max_speed: 0.3            # m/s — translational cap (body frame)
   max_vyaw: 0.8             # rad/s — yaw rate cap
 
 gains:
@@ -14,7 +14,8 @@ gains:
   kp_yaw: 1.5               # P-gain for heading alignment (1/s)
 
 arrival:
-  tol: 0.50                 # m — goal reached when dist < this
+  tol: 0.25                 # m — goal reached when dist < this
+  yaw_tol: 0.10             # rad — heading aligned when |err| < this (~6°)
 
 path:
   lookahead_cells: 20       # cells ahead on path to track (~1.0 m at 0.05 m/cell)

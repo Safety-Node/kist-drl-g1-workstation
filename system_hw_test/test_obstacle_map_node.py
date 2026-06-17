@@ -290,7 +290,6 @@ def _run_viz(state: _State, dest_key: str, goal: tuple,
     )
     ax.set_xlabel('x (m)')
     ax.set_ylabel('y (m)')
-    ax.set_aspect('equal')
 
     img = ax.imshow(
         np.zeros((1, 1)), cmap=cmap, vmin=0, vmax=100,
