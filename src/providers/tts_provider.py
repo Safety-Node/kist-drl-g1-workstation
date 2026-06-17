@@ -338,11 +338,25 @@ class TTSProvider:
         resampled = np.interp(x_new, x_old, samples)
         return resampled.astype(np.int16).tobytes()
 
+    # G1 provider 의 per-message DDS payload 한도 (65500 B) 이하로 쪼개기.
+    # 32000 B ≈ 1.0s @ 16kHz mono int16 — 한도 절반으로 여유. NX speaker_node
+    # 는 chunk queue 로 받아 SpeakerState.current_chunk_id / queue_depth 로
+    # 진행 상황을 publish 함 (한 발화를 한 메시지로 보내는 게 설계 의도가 아님).
+    _PUBLISH_CHUNK_BYTES = 32000
+
     def _publish(self, pcm: bytes) -> None:
-        """Publish 16 kHz mono int16 PCM to NX; log + drop if TASK-41 pending."""
+        """Publish 16 kHz mono int16 PCM to NX; chunk to fit G1 per-msg limit."""
+        if not pcm:
+            return
         try:
-            self._unitree_g1.publish_audio_out(pcm)
-            logging.info("TTSProvider: published %d bytes to /bridge/cmd/audio_out", len(pcm))
+            n = 0
+            for i in range(0, len(pcm), self._PUBLISH_CHUNK_BYTES):
+                self._unitree_g1.publish_audio_out(pcm[i:i + self._PUBLISH_CHUNK_BYTES])
+                n += 1
+            logging.info(
+                "TTSProvider: published %d bytes in %d chunks to /bridge/cmd/audio_out",
+                len(pcm), n,
+            )
         except NotImplementedError:
             logging.warning(
                 "TTSProvider: publish_audio_out NotImplementedError (TASK-41 pending) "
