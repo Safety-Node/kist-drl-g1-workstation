@@ -51,10 +51,13 @@ if "rclpy" not in sys.modules:
 
     _stub("rclpy", ok=lambda: False, init=lambda **kw: None, shutdown=lambda: None)
     _stub("rclpy.node", Node=object)
+    _stub("rclpy.callback_groups", MutuallyExclusiveCallbackGroup=object)
     _stub("rclpy.executors", MultiThreadedExecutor=object)
     _stub("rclpy.qos", HistoryPolicy=object, QoSProfile=object, ReliabilityPolicy=object)
     _stub("geometry_msgs")
     _stub("geometry_msgs.msg", PoseStamped=object, Twist=object)
+    _stub("nav_msgs")
+    _stub("nav_msgs.msg", OccupancyGrid=object)
     _stub("sensor_msgs")
     _stub("sensor_msgs.msg", CompressedImage=object, Image=object, Imu=object, JointState=object)
     _stub("g1_onboard_msgs")
