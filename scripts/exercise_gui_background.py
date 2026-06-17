@@ -29,6 +29,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+import os
+os.environ.pop("CYCLONEDDS_URI", None)
+
 
 def _stub(name, **attrs):
     mod = types.ModuleType(name)
