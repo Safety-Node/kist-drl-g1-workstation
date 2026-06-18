@@ -336,7 +336,7 @@ class UnitreeG1Provider:
             )
             self._sub_audio_pcm = self._node.create_subscription(
                 AudioPCM, self._audio_pcm_topic,
-                self._on_audio_pcm, _qos_be, callback_group=cb_audio,
+                self._on_audio_pcm, _qos_rel, callback_group=cb_audio,
             )
             self._sub_joint_state = self._node.create_subscription(
                 JointState, "/bridge/sensors/joint_states",
