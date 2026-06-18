@@ -82,6 +82,7 @@ class NavigationProviderConfig:
 
     # Arrival
     arrival_tol: float = 0.25
+    yaw_tol:     float = 0.10   # rad — final heading tolerance (~6°)
 
     # Path following
     lookahead_cells:  int   = 20
@@ -119,6 +120,7 @@ def _load_nav_config() -> NavigationProviderConfig:
         kp_xy              = _g("gains",    "kp_xy",               0.8),
         kp_yaw             = _g("gains",    "kp_yaw",              1.5),
         arrival_tol        = _g("arrival",  "tol",                 0.25),
+        yaw_tol            = _g("arrival",  "yaw_tol",             0.10),
         lookahead_cells    = _g("path", "lookahead_cells",  20),
         planner_rate_hz    = _g("path", "planner_rate_hz",  20.0),
         astar_weight       = _g("path", "astar_weight",      2.0),
@@ -135,7 +137,7 @@ class NavigationState:
     vx: float = 0.0
     vy: float = 0.0
     vyaw: float = 0.0
-    mode: str = "IDLE"    # IDLE / NAVIGATING / ARRIVED / ESTOP / WAITING_POSE / PLANNING
+    mode: str = "IDLE"    # IDLE / NAVIGATING / ALIGNING / ARRIVED / ESTOP / WAITING_POSE / PLANNING
     goal_id: Optional[str] = None
     dist_to_goal: float = 0.0
 
@@ -157,14 +159,15 @@ class NavigationProvider:
         self._config = config if config is not None else _load_nav_config()
         self._unitree_g1 = UnitreeG1Provider()
 
-        # Location table
-        self._locations: Dict[str, Tuple[float, float]] = {}
+        # Location table: name → (x, y, Optional[yaw_rad])
+        self._locations: Dict[str, Tuple[float, float, Optional[float]]] = {}
         self._load_locations()
 
         # Goal (written by submit_nav_subtask, read by worker)
         self._goal_lock = threading.Lock()
-        self._goal:    Optional[Tuple[float, float]] = None
-        self._goal_id: Optional[str] = None
+        self._goal:     Optional[Tuple[float, float]] = None
+        self._goal_yaw: Optional[float] = None
+        self._goal_id:  Optional[str] = None
 
         # Planned path (written and read exclusively by worker thread)
         self._path:       Optional[List[Tuple[int, int]]] = None
@@ -238,11 +241,13 @@ class NavigationProvider:
         if location_id is None:
             _log.warning("NavigationProvider: no known location in prompt %r", prompt)
             return
-        gx, gy = self._locations[location_id]
+        gx, gy, gyaw = self._locations[location_id]
         with self._goal_lock:
-            self._goal    = (gx, gy)
-            self._goal_id = location_id
-        _log.info("NavigationProvider: goal set → %s (%.2f, %.2f)", location_id, gx, gy)
+            self._goal     = (gx, gy)
+            self._goal_yaw = gyaw
+            self._goal_id  = location_id
+        _log.info("NavigationProvider: goal set → %s (%.2f, %.2f) yaw=%s",
+                  location_id, gx, gy, f"{math.degrees(gyaw):.1f}°" if gyaw is not None else "none")
 
     # ------------------------------------------------------------------
     # State
@@ -275,8 +280,9 @@ class NavigationProvider:
             return
 
         with self._goal_lock:
-            goal    = self._goal
-            goal_id = self._goal_id
+            goal     = self._goal
+            goal_yaw = self._goal_yaw
+            goal_id  = self._goal_id
 
         if goal is None:
             self._path = None
@@ -306,9 +312,23 @@ class NavigationProvider:
         dist = math.sqrt(dx_g * dx_g + dy_g * dy_g)
 
         if dist < self._config.arrival_tol:
+            # 목표 yaw 정렬이 필요한 경우 ALIGNING 단계
+            if goal_yaw is not None:
+                yaw_err = _wrap_pi(goal_yaw - ryaw)
+                if abs(yaw_err) > self._config.yaw_tol:
+                    vyaw = max(-self._config.max_vyaw,
+                               min(self._config.max_vyaw, self._config.kp_yaw * yaw_err))
+                    self._unitree_g1.publish_twist(0.0, 0.0, vyaw)
+                    self._set_state(NavigationState(
+                        t_monotonic=now, mode="ALIGNING", goal_id=goal_id,
+                        dist_to_goal=dist,
+                    ))
+                    return
+
             with self._goal_lock:
-                self._goal    = None
-                self._goal_id = None
+                self._goal     = None
+                self._goal_yaw = None
+                self._goal_id  = None
             self._path = None
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(
@@ -436,7 +456,8 @@ class NavigationProvider:
             return
         for name, coords in raw.items():
             if isinstance(coords, (list, tuple)) and len(coords) >= 2:
-                self._locations[name] = (float(coords[0]), float(coords[1]))
+                yaw = float(coords[2]) if len(coords) >= 3 and coords[2] is not None else None
+                self._locations[name] = (float(coords[0]), float(coords[1]), yaw)
             else:
                 _log.warning("NavigationProvider: invalid coords for %r: %r", name, coords)
         _log.info("NavigationProvider: loaded %d locations from %s",

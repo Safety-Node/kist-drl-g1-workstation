@@ -31,6 +31,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
+import os
+os.environ.pop("CYCLONEDDS_URI", None)
+
 # ---------------------------------------------------------------------------
 # Minimal ROS 2 stub — allows importing UnitreeG1Provider in environments
 # where rclpy is not installed (import-time only; no rclpy calls are made

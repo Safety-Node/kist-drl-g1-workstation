@@ -12,11 +12,13 @@ AGC/노이즈게이트 진단, 주파수별 노이즈 파악 등에 사용.
 전제:
     source env.sh                       # ROS2 + g1_onboard_msgs
 실행:
-    uv run python scripts/visualize_audio_pcm_stft.py
+    uv run python scripts/visualize_audio_pcm_stft.py                          # 로봇 마이크
     uv run python scripts/visualize_audio_pcm_stft.py --topic /bridge/sensors/audio_pcm
+    uv run python scripts/visualize_audio_pcm_stft.py --local                  # 로컬 DDS (CYCLONEDDS_URI 무시)
 """
 
 import argparse
+import os
 import threading
 import time
 from collections import deque
@@ -78,7 +80,7 @@ class AudioSTFTTap(Node):
     def __init__(self, topic: str):
         super().__init__("visualize_audio_pcm_stft")
         sensor_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=20,
         )
@@ -150,7 +152,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--topic", default="/bridge/sensors/audio_pcm")
     ap.add_argument("--refresh-hz", type=float, default=20.0)
+    ap.add_argument("--local", action="store_true", help="로컬 DDS 사용 (CYCLONEDDS_URI 무시)")
     args = ap.parse_args()
+
+    if args.local:
+        os.environ.pop("CYCLONEDDS_URI", None)
 
     rclpy.init()
     node = AudioSTFTTap(args.topic)

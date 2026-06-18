@@ -158,6 +158,7 @@ class UnitreeG1Provider:
         sensor_ttl_ms: int = 200,
         state_ttl_ms: int = 1000,
         executor_threads: int = 4,
+        audio_pcm_topic: str = "/bridge/sensors/audio_pcm",
     ):
         """
         Parameters
@@ -192,6 +193,7 @@ class UnitreeG1Provider:
         self._sensor_ttl_ms = sensor_ttl_ms
         self._state_ttl_ms = state_ttl_ms
         self._executor_threads = executor_threads
+        self._audio_pcm_topic = audio_pcm_topic
 
         self._connected = False
 
@@ -333,8 +335,8 @@ class UnitreeG1Provider:
                 self._on_depth, _qos_be, callback_group=cb_depth,
             )
             self._sub_audio_pcm = self._node.create_subscription(
-                AudioPCM, "/bridge/sensors/audio_pcm",
-                self._on_audio_pcm, _qos_be, callback_group=cb_audio,
+                AudioPCM, self._audio_pcm_topic,
+                self._on_audio_pcm, _qos_rel, callback_group=cb_audio,
             )
             self._sub_joint_state = self._node.create_subscription(
                 JointState, "/bridge/sensors/joint_states",
@@ -363,6 +365,14 @@ class UnitreeG1Provider:
             self._sub_occupancy = self._node.create_subscription(
                 OccupancyGrid, "/bridge/sensors/lidar/occupancy",
                 self._on_occupancy, _qos_be, callback_group=cb_occupancy,
+            )
+            self._sub_location = self._node.create_subscription(
+                PoseStamped, "/bridge/sensors/location",
+                self._on_location, _qos_be,
+            )
+            self._sub_occupancy = self._node.create_subscription(
+                OccupancyGrid, "/bridge/sensors/lidar/occupancy",
+                self._on_occupancy, _qos_be,
             )
 
             # Reliable subscribers
