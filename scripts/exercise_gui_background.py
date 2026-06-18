@@ -41,14 +41,39 @@ def _stub(name, **attrs):
     return mod
 
 
-# rclpy stub so the REAL UnitreeG1Provider imports without ROS.
+# ROS stubs so the REAL UnitreeG1Provider imports without ROS installed.
+# Keep these in sync with unitree_g1_provider's module-level imports.
 if "rclpy" not in sys.modules:
+
+    class _LocoCommandStub:
+        # Module-level _LOCO_NAME_TO_ACTION reads these at import time.
+        ACTION_STAND_UP = 0
+        ACTION_SIT_DOWN = 1
+        ACTION_DAMP = 2
+        ACTION_BALANCE_STAND = 3
+
     _stub("rclpy", ok=lambda: False, init=lambda **kw: None, shutdown=lambda: None)
     _stub("rclpy.node", Node=object)
+    _stub("rclpy.callback_groups", MutuallyExclusiveCallbackGroup=object)
     _stub("rclpy.executors", MultiThreadedExecutor=object)
     _stub("rclpy.qos", HistoryPolicy=object, QoSProfile=object, ReliabilityPolicy=object)
+    _stub("geometry_msgs")
+    _stub("geometry_msgs.msg", PoseStamped=object, Twist=object)
+    _stub("nav_msgs")
+    _stub("nav_msgs.msg", OccupancyGrid=object)
     _stub("sensor_msgs")
-    _stub("sensor_msgs.msg", Imu=object)
+    _stub("sensor_msgs.msg", CompressedImage=object, Image=object, Imu=object, JointState=object)
+    _stub("g1_onboard_msgs")
+    _stub(
+        "g1_onboard_msgs.msg",
+        AudioPCM=object,
+        BufState=object,
+        EstopFlag=object,
+        JointCmd=object,
+        JointCmdChunk=object,
+        LocoCommand=_LocoCommandStub,
+        SpeakerState=object,
+    )
 
 from providers.unitree_g1_provider import TopicCache, UnitreeG1Provider  # noqa: E402
 from providers.task_srv_provider import TaskSrvConfig, TaskSrvProvider  # noqa: E402
