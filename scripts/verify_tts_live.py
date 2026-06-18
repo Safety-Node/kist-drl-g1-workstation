@@ -20,14 +20,16 @@ g1.publish_audio_out 으로 직접 publish 하면 된다.
     export NCP_CLOVA_CLIENT_SECRET=...
     (NX 측 comm_bridge + speaker_node 가 떠 있어야 실제 소리가 남)
 실행:
-    uv run python scripts/verify_tts_live.py "냉장고에서 오이 가져올게요"
+    uv run python scripts/verify_tts_live.py "냉장고에서 오이 가져올게요"          # 로봇 스피커
     uv run python scripts/verify_tts_live.py --voice nara --chunk-ms 200 "안녕하세요"
+    uv run python scripts/verify_tts_live.py --local "안녕하세요"                 # 로컬 DDS (CYCLONEDDS_URI 무시)
 """
 
 import argparse
 import asyncio
 import logging
 import math
+import os
 import sys
 import time
 from array import array
@@ -36,9 +38,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
-
-import os
-os.environ.pop("CYCLONEDDS_URI", None)
 
 import dotenv
 dotenv.load_dotenv(dotenv_path=_ROOT / ".env")
@@ -164,7 +163,12 @@ def main() -> int:
                     help="0=한 메시지로 전송 / >0=해당 ms 단위로 쪼개 pace")
     ap.add_argument("--listen-sec", type=float, default=6.0,
                     help="발행 후 speaker_state 전이를 듣는 시간(초)")
+    ap.add_argument("--local", action="store_true", help="로컬 DDS 사용 (CYCLONEDDS_URI 무시)")
     args = ap.parse_args()
+
+    if args.local:
+        os.environ.pop("CYCLONEDDS_URI", None)
+
     if not args.tone and not args.text:
         ap.error("text 인자가 필요합니다 (또는 --tone 사용)")
 
