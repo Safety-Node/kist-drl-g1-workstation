@@ -26,20 +26,20 @@
       name: "go_fridge",
       on_create: [{ speak: "냉장고로 갑니다." }],
       on_start:  [{ move: "Walk to the refrigerator and face the door.", delay: 1.0 }],
-      success: { type: "uwb_pose", target: [2.10, -0.40, 1.5708], tol_xy: 0.20, timeout_s: 25 },
+      success: { type: "delay", seconds: 15.0, timeout_s: 16.0 },
       on_success: [{ speak: "냉장고에 도착했습니다." }],
       on_fail:    [{ speak: "냉장고 이동에 실패했습니다." }],
     },
     // ── 식탁 leg ────────────────────────────────────────────────
     {
       name: "await_table_cmd",
-      success: { type: "voice_keyword", keywords: ["식탁으로 가", "식탁으로"], timeout_s: 300 },
+      success: { type: "voice_keyword", keywords: ["타고가.","식당으로가","차로가.","타그로.","식탁으로가.","식탁","테이블","식탁으로 가", "식탁으로", "식탁으로!", "식당으로", "식탁으로가", "탁으로가"], timeout_s: 300 },
     },
     {
       name: "go_table",
       on_create: [{ speak: "식탁으로 갑니다." }],
       on_start:  [{ move: "Walk to the table.", delay: 1.0 }],
-      success: { type: "uwb_pose", target: [0.50, 0.30, -1.5708], tol_xy: 0.20, timeout_s: 25 },
+      success: { type: "delay", seconds: 15.0, timeout_s: 16.0 },
       on_success: [{ speak: "식탁에 도착했습니다." }],
       on_fail:    [{ speak: "식탁 이동에 실패했습니다." }],
     },

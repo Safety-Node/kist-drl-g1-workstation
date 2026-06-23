@@ -765,12 +765,20 @@ class TaskSrvProvider:
             else:
                 # Buffer for the current sub-task's criterion (voice gate). A
                 # phrase belonging to a consumed sub-task matches nothing here.
+                logging.info(
+                    "TaskSrvProvider: transcript (scenario=%s, sub_task=%s): %r",
+                    self._active_scenario.name,
+                    self.active_sub_task.name if self.active_sub_task else "?",
+                    text,
+                )
                 self._active_transcripts.append(text)
             return
         matched = self._match_trigger(text)
         if matched is not None:
             logging.info("TaskSrvProvider: trigger %r matched scenario '%s'", text, matched.name)
             self._activate(matched)
+        else:
+            logging.info("TaskSrvProvider: transcript (idle, no match): %r", text)
 
     # -- tick: success poll (runs on the loop thread) ----------------------
     def tick(self) -> None:

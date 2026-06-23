@@ -40,6 +40,7 @@ TODO(REQ-31) [TASK-44]: E-STOP cancellation — UnitreeG1.estop edge triggers
 
 import asyncio
 import logging
+import re
 import weakref
 
 from actions.base import ActionConfig, ActionConnector
@@ -101,13 +102,18 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
                     self._unitree_g1.publish_loco_cmd({"name": name})
                     return
 
-            # 2. Navigation — continuous walking via NavigationProvider
+            # 2. Direct twist — "twist vx=.. vy=.. vyaw=.. duration=.."
+            if key.startswith("twist"):
+                await self._do_twist(prompt)
+                return
+
+            # 3. Navigation — continuous walking via NavigationProvider
             if any(kw in key for kw in _NAV_KEYWORDS):
                 _log.info("MoveConnector: nav path — prompt=%r", prompt)
                 self._navigation.submit_nav_subtask(prompt)
                 return
 
-            # 3. Manipulation — VLA arm/hand chunk stream
+            # 4. Manipulation — VLA arm/hand chunk stream
             _log.info("MoveConnector: VLA path — prompt=%r", prompt)
             await self._vla.infer(prompt)
 
@@ -119,3 +125,21 @@ class MoveConnector(ActionConnector[ActionConfig, MoveInput]):
                 "MoveConnector: connect() error (prompt=%r) — swallowing per fire-and-forget contract",
                 prompt,
             )
+
+    async def _do_twist(self, prompt: str) -> None:
+        """Parse 'twist vx=.. vy=.. vyaw=.. duration=..' and publish at 10 Hz."""
+        params = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0, "duration": 1.0}
+        for m in re.finditer(r"(vx|vy|vyaw|duration)=([-\d.]+)", prompt):
+            params[m.group(1)] = float(m.group(2))
+        vx, vy, vyaw = params["vx"], params["vy"], params["vyaw"]
+        duration = params["duration"]
+        _log.info(
+            "MoveConnector: twist path — vx=%.2f vy=%.2f vyaw=%.2f duration=%.1fs",
+            vx, vy, vyaw, duration,
+        )
+        dt = 0.1
+        steps = max(1, round(duration / dt))
+        for _ in range(steps):
+            self._unitree_g1.publish_twist(vx, vy, vyaw)
+            await asyncio.sleep(dt)
+        self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
