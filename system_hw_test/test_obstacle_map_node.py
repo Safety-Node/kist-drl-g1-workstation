@@ -400,7 +400,7 @@ def main() -> int:
         print(f"    등록된 목적지: {list(LOCATIONS)}")
         return 1
 
-    goal = LOCATIONS[dest_key]
+    goal = LOCATIONS[dest_key][:2]
 
     # 플래너 프로세스 시작
     in_q  = mp.Queue(maxsize=1)
