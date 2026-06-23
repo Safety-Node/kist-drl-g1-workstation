@@ -15,7 +15,7 @@
   name: "move_test",
   triggers: ["이동 테스트 시작", "이동 테스트"],
   exit_keywords: ["시연 끝", "그만"],   // 진행 중 언제든 탈출 → IDLE
-  on_scenario_start: [{ speak: "이동 테스트를 시작합니다. 냉장고로 가, 식탁으로 가, 집으로 가 순서로 말씀해주세요." }],
+  on_scenario_start: [{ speak: "이동 테스트를 시작합니다." }],
   on_scenario_end:   [{ speak: "이동 테스트를 마칩니다." }],
   sub_tasks: [
     // ── 냉장고 leg ──────────────────────────────────────────────
