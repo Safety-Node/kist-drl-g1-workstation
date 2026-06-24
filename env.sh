@@ -26,6 +26,15 @@ if [[ -f "${_ros2_ws_setup}" ]]; then
   source "${_ros2_ws_setup}"
 fi
 unset _ros2_ws_setup
+# Source route-planner C++ pipeline (pybind11 .so → import route_planner_py)
+# Build first: cd third_party/route_planner && colcon build --packages-select route_planner
+_rp_setup="${_env_sh_dir}/third_party/route_planner/install/setup.bash"
+if [[ -f "${_rp_setup}" ]]; then
+  source "${_rp_setup}"
+else
+  echo "route-planner not built — run: (cd third_party/route_planner && colcon build --packages-select route_planner)" >&2
+fi
+unset _rp_setup
 export CYCLONEDDS_URI="file://${_cyclonedds_xml}"
 export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
