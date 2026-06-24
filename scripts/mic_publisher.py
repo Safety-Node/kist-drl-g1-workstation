@@ -68,8 +68,11 @@ class MicPublisher(Node):
         # blocksize in native samples so output is ~CHUNK_MS ms at TARGET_RATE
         self._blocksize = native_sr * CHUNK_MS // 1000
 
+        # /bridge/sensors/audio_pcm contract is RELIABLE (see commit 03a9076):
+        # UnitreeG1Provider / visualize_audio_pcm_stft both subscribe RELIABLE
+        # so the publisher must match or DDS will refuse the connection.
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=20,
         )
