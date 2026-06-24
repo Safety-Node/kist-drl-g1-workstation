@@ -1,24 +1,26 @@
 """
 Exercise TaskSrvProvider standalone — no STT / VLA / DDS backends.
 
-Drives the redesigned hook + voice-gated engine (REQ-44, 2026-05-30) through
-the LINEAR, consume-once ``move_test`` scenario end-to-end with FakeConnectors
-and injected fake UWB poses. Each leg = two sub-tasks: ① wait for a voice
-command (voice_keyword) → ② Move + UWB arrival (uwb_pose). No loop, so a
-consumed command keyword does NOT re-fire — this script demonstrates that by
-re-issuing "냉장고로 가" after the fridge leg and showing it is ignored.
+Drives the LINEAR, consume-once ``move_test`` scenario end-to-end with
+FakeConnectors and a fake NavigationProvider. Each leg = two sub-tasks:
+① wait for a voice command (voice_keyword) → ② Move + nav ARRIVED
+(nav_state, mode=ARRIVED). No loop, so a consumed command keyword does NOT
+re-fire — re-issuing "냉장고로 가" after the fridge leg succeeds is ignored
+because the active sub-task only listens for 식탁.
 
 Run from repo root:
     uv run python scripts/exercise_task_srv.py
 
 Expected log order:
-  - loads scenarios from config/scenarios/*.yaml ; tick loop entering
+  - loads scenarios from config/scenarios/*.json5 ; tick loop entering
   - trigger '이동 테스트 시작' → on_scenario_start [SPEAK] 이동 테스트를 시작합니다...
   - command '냉장고로 가' → go_fridge: [SPEAK] 냉장고로 갑니다. + [MOVE] Walk to the refrigerator...
-  - (fake fridge pose) → [SPEAK] 냉장고에 도착했습니다.   (now current = await_table_cmd)
+  - inject nav ARRIVED → [SPEAK] 냉장고에 도착했습니다.   (now current = await_table_cmd)
   - RE-ISSUE '냉장고로 가' → IGNORED (await_table_cmd only listens for 식탁); state stays active
   - command '식탁으로 가' → go_table: [SPEAK] 식탁으로 갑니다. + [MOVE] Walk to the table.
-  - (fake table pose) → [SPEAK] 식탁에 도착했습니다. → on_scenario_end → state IDLE
+  - inject nav ARRIVED → [SPEAK] 식탁에 도착했습니다. (current = await_home_cmd)
+  - command '집으로 가' → go_home: [SPEAK] 처음 위치로 돌아갑니다. + [MOVE] Walk to the home position.
+  - inject nav ARRIVED → [SPEAK] 처음 위치에 도착했습니다. → on_scenario_end → state IDLE
   - Clean shutdown on stop event
 """
 
@@ -59,6 +61,38 @@ def _inject_uwb_pose(x: float, y: float, yaw: float) -> None:
     g1._uwb_pose = TopicCache(value={"x": x, "y": y, "yaw": yaw}, last_seen_ts=time.monotonic())
 
 
+class _FakeNavProvider:
+    """Stand-in for NavigationProvider — only ``get_state()`` is called by the
+    NavState criterion. ``set(mode)`` drives transitions from the test script.
+    """
+
+    def __init__(self) -> None:
+        from providers.navigation_provider import NavigationState
+        self._NavigationState = NavigationState
+        self._state = NavigationState(t_monotonic=time.monotonic(), mode="IDLE")
+
+    def get_state(self) -> Any:
+        return self._state
+
+    def set(self, mode: str) -> None:
+        self._state = self._NavigationState(t_monotonic=time.monotonic(), mode=mode)
+
+
+def _inject_nav_state(mode: str) -> None:
+    """Plug a fake NavigationProvider into TaskSrvProvider and set its mode.
+
+    Satisfies a ``nav_state`` criterion without running the real navigation
+    stack. First call installs the fake on the TaskSrvProvider singleton;
+    subsequent calls just mutate the mode.
+    """
+    ts = TaskSrvProvider()
+    nav = getattr(ts, "_nav_provider", None)
+    if not isinstance(nav, _FakeNavProvider):
+        nav = _FakeNavProvider()
+        ts._nav_provider = nav
+    nav.set(mode)
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -95,33 +129,48 @@ def main() -> int:
         ts.on_audio("이동 테스트 시작", ts=time.monotonic())
         time.sleep(1.0)
 
+        # ── fridge leg ─────────────────────────────────────────────────
         logging.info(">>> T+2.0s: command '냉장고로 가'")
         ts.on_audio("냉장고로 가", ts=time.monotonic())
-        time.sleep(1.0)
+        time.sleep(2.0)   # move action has delay=1.0; give it time to fire too
 
-        logging.info(">>> T+3.0s: inject fake UWB pose at the refrigerator")
-        _inject_uwb_pose(2.10, -0.40, 1.5708)
-        time.sleep(1.5)
+        logging.info(">>> T+4.0s: inject nav.mode=ARRIVED (fridge)")
+        _inject_nav_state("ARRIVED")
+        time.sleep(1.0)
 
         # Consume-once proof: fridge leg is done; current sub-task is now
         # await_table_cmd, which only listens for 식탁. Re-issuing 냉장고 must
         # be ignored (no [SPEAK]/[MOVE], state stays active on move_test).
-        logging.info(">>> T+4.5s: RE-ISSUE '냉장고로 가' (should be IGNORED) — sub-task='%s'",
+        logging.info(">>> T+5.0s: RE-ISSUE '냉장고로 가' (should be IGNORED) — sub-task='%s'",
                      ts.active_sub_task.name if ts.active_sub_task else None)
         ts.on_audio("냉장고로 가", ts=time.monotonic())
         time.sleep(1.0)
-        logging.info(">>> T+5.5s: state=%s sub-task=%s (still awaiting 식탁)",
+        logging.info(">>> T+6.0s: state=%s sub-task=%s (still awaiting 식탁)",
                      ts.state.value, ts.active_sub_task.name if ts.active_sub_task else None)
 
-        logging.info(">>> T+5.5s: command '식탁으로 가'")
+        # ── table leg ──────────────────────────────────────────────────
+        # The fake nav still says mode=ARRIVED from the fridge leg, but with
+        # an old t_monotonic — go_table's criterion must reject it as stale.
+        # Only the next _inject_nav_state("ARRIVED") (fresh ts) succeeds.
+        logging.info(">>> T+6.0s: command '식탁으로 가'")
         ts.on_audio("식탁으로 가", ts=time.monotonic())
+        time.sleep(2.0)
+
+        logging.info(">>> T+8.0s: inject nav.mode=ARRIVED (table)")
+        _inject_nav_state("ARRIVED")
         time.sleep(1.0)
 
-        logging.info(">>> T+6.5s: inject fake UWB pose at the table")
-        _inject_uwb_pose(0.50, 0.30, -1.5708)
+        # ── home leg ───────────────────────────────────────────────────
+        logging.info(">>> T+9.0s: command '집으로 가'  — sub-task='%s'",
+                     ts.active_sub_task.name if ts.active_sub_task else None)
+        ts.on_audio("집으로 가", ts=time.monotonic())
+        time.sleep(2.0)
+
+        logging.info(">>> T+11.0s: inject nav.mode=ARRIVED (home)")
+        _inject_nav_state("ARRIVED")
         time.sleep(1.5)
 
-        logging.info(">>> T+8.0s: state=%s (scenario should have ended → idle)", ts.state.value)
+        logging.info(">>> T+12.5s: state=%s (scenario should have ended → idle)", ts.state.value)
 
     except KeyboardInterrupt:
         logging.info(">>> KeyboardInterrupt — stopping")
