@@ -44,7 +44,8 @@ PC requirements:
 # System deps
 sudo apt-get update && sudo apt-get install -y \
     portaudio19-dev python3-dev ffmpeg \
-    ros-humble-rmw-cyclonedds-cpp
+    ros-humble-rmw-cyclonedds-cpp \
+    pybind11-dev libyaml-cpp-dev
 
 # ROS 2 — https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 # Repo-local activation (recommended)
@@ -53,10 +54,15 @@ source env.sh
 # Python deps (CycloneDDS Python bindings build against the C lib above)
 uv sync --extra dds
 
-# Vendored Unitree SDK (used by src/runtime/robotics.py).
-# Note: src/ubtech/ is also listed in .gitmodules from upstream OM1 but is not
-# imported by KIST code — init only what's used.
-git submodule update --init src/unitree
+# Submodules
+# - src/unitree: Unitree SDK (required)
+# - third_party/route_planner: C++ route planning pipeline (required)
+# Note: src/ubtech/ is unused in KIST flow — not initialized.
+git submodule update --init src/unitree third_party/route_planner
+
+# Build route-planner (C++ → pybind11 .so)
+# Must be re-run whenever third_party/route_planner is updated.
+(cd third_party/route_planner && colcon build --packages-select route_planner)
 
 # Credentials — loaded from repo-root .env by src/run.py (python-dotenv).
 # Required keys: NCP_CLOVA_CLIENT_ID / NCP_CLOVA_CLIENT_SECRET (TTS),
@@ -121,9 +127,10 @@ Each `TODO(REQ-XX) [TASK-XX]` in code links to the matching Notion page.
 - No pytest infra — `system_hw_test/` + dev logging only
 - Upstream merge path inactive — no `upstream` git remote configured. OM1 changes are
   not auto-tracked; any future absorption is a manual cherry-pick.
-- Two submodules pinned from upstream OM1:
-  - `src/unitree/` — Unitree SDK (used by `src/runtime/robotics.py`, **required**)
+- Submodules:
+  - `src/unitree/` — Unitree SDK (upstream OM1, used by `src/runtime/robotics.py`, **required**)
   - `src/ubtech/` — UBTech (Yanshee etc.) SDK, **unused in KIST flow** — slated for removal alongside `src/providers/io_provider.py`.
+  - `third_party/route_planner/` — KIST-added C++ route planning pipeline (PointCloud2 → EDT Costmap → A*), exposed to Python via pybind11. **Required** for `NavigationProvider`.
 
 ---
 
