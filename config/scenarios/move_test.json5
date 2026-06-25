@@ -13,7 +13,7 @@
 // tol_yaw 생략 → 기본 무한대(yaw 무시). target/tolerance는 placeholder.
 {
   name: "move_test",
-  triggers: ["이동 테스트 시작", "이동 테스트"],
+  triggers: ["이동 테스트 시작", "이동 테스트", "이동 텍스", "이동 엑스", "이동 패스", "이동"],
   exit_keywords: ["시연 끝", "그만"],   // 진행 중 언제든 탈출 → IDLE
   on_scenario_start: [{ speak: "이동 테스트를 시작합니다." }],
   on_scenario_end:   [{ speak: "이동 테스트를 마칩니다." }],
@@ -27,7 +27,7 @@
       name: "go_fridge",
       on_create: [{ speak: "냉장고로 갑니다." }],
       on_start:  [{ move: "Walk to the refrigerator and face the door.", delay: 1.0 }],
-      success: { type: "delay", seconds: 15.0, timeout_s: 16.0 },
+      success: { type: "delay", seconds: 30.0, timeout_s: 40.0 },
       on_success: [{ speak: "냉장고에 도착했습니다." }],
       on_fail:    [{ speak: "냉장고 이동에 실패했습니다." }],
     },
@@ -40,7 +40,7 @@
       name: "go_table",
       on_create: [{ speak: "식탁으로 갑니다." }],
       on_start:  [{ move: "Walk to the table.", delay: 1.0 }],
-      success: { type: "delay", seconds: 15.0, timeout_s: 16.0 },
+      success: { type: "delay", seconds: 25.0, timeout_s: 35.0 },
       on_success: [{ speak: "식탁에 도착했습니다." }],
       on_fail:    [{ speak: "식탁 이동에 실패했습니다." }],
     },
@@ -53,7 +53,7 @@
       name: "go_home",
       on_create: [{ speak: "처음 위치로 돌아갑니다." }],
       on_start:  [{ move: "Walk to the home position.", delay: 1.0 }],
-      success: { type: "delay", seconds: 15.0, timeout_s: 16.0 },
+      success: { type: "delay", seconds: 30.0, timeout_s: 40.0 },
       on_success: [{ speak: "처음 위치에 도착했습니다." }],
       on_fail:    [{ speak: "복귀 이동에 실패했습니다." }],
     },

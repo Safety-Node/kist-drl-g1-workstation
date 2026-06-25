@@ -85,17 +85,17 @@ class NavigationProviderConfig:
     yaw_tol:     float = 0.10   # rad — final heading tolerance (~6°)
 
     # Path following
-    lookahead_cells:  int   = 20
+    lookahead_cells:  int   = 2
     planner_rate_hz:  float = 20.0
-    astar_weight:     float = 1.0   # f = g + w*h (1.0=optimal, >1 suppresses detours)
+    astar_weight:     float = 2.0   # f = g + w*h (1.0=optimal, >1 suppresses detours)
 
     # Stale-data handling
     pose_timeout_s: float = 0.5
 
     # Costmap
     base_cost:  float = 1.0
-    obs_cost:   float = 9999.0
-    decay_rate: float = 0.3    # fraction reduced per BFS step from obs_cost
+    obs_cost:   float = 99999.0
+    decay_rate: float = 0.1    # fraction reduced per BFS step from obs_cost
 
 
 def _load_nav_config() -> NavigationProviderConfig:
@@ -121,12 +121,12 @@ def _load_nav_config() -> NavigationProviderConfig:
         kp_yaw             = _g("gains",    "kp_yaw",              1.5),
         arrival_tol        = _g("arrival",  "tol",                 0.25),
         yaw_tol            = _g("arrival",  "yaw_tol",             0.10),
-        lookahead_cells    = _g("path", "lookahead_cells",  20),
+        lookahead_cells    = _g("path", "lookahead_cells",  2),
         planner_rate_hz    = _g("path", "planner_rate_hz",  20.0),
         astar_weight       = _g("path", "astar_weight",      2.0),
         base_cost  = _g("costmap", "base_cost",  1.0),
-        obs_cost   = _g("costmap", "obs_cost",   9999.0),
-        decay_rate = _g("costmap", "decay_rate", 0.3),
+        obs_cost   = _g("costmap", "obs_cost",   99999.0),
+        decay_rate = _g("costmap", "decay_rate", 0.1),
         locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
     )
 
