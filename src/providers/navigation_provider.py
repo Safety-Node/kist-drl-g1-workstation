@@ -5,12 +5,12 @@ PC-side navigation: translates nav sub-task prompts → continuous walking
 velocity (vx/vy/vyaw) via UnitreeG1Provider.publish_twist.
 
 Position source : /bridge/sensors/location  (EKF-fused PoseStamped, map frame)
-Obstacle source : /bridge/sensors/lidar/occupancy  (OccupancyGrid, map frame)
+Obstacle source : /bridge/sensors/lidar/points  (PointCloud2 — consumed by route_planner_py C++ pipeline)
 Location table  : config/locations.json5  (place_id → [x, y])
 
-Algorithm: A* on BFS-inflated costmap + lookahead path follower.
-  1. Route planning  — A* finds a cell-path on the inflated costmap once per
-     goal (re-planned each time the goal or occupancy map changes).
+Algorithm: route_planner_py (C++) pipeline + lookahead path follower.
+  1. Route planning  — RoutePlannerPipeline (T1-T6 threads) continuously
+     processes PointCloud2 → EDT Costmap → A* path in the background.
   2. Path following  — Each tick the robot projects itself onto the path,
      picks a point `lookahead_cells` ahead, and drives toward it with a
      P-controller (map-frame attraction, then rotated to body frame).
@@ -40,9 +40,10 @@ import json5
 import numpy as np
 import yaml
 
+import route_planner_py as rp
+
 from .singleton import singleton
 from .unitree_g1_provider import UnitreeG1Provider
-from .utils.route_utils import astar, c2m, inflate_costmap, m2c
 
 _log = logging.getLogger(__name__)
 
@@ -85,17 +86,10 @@ class NavigationProviderConfig:
     yaw_tol:     float = 0.10   # rad — final heading tolerance (~6°)
 
     # Path following
-    lookahead_cells:  int   = 20
-    planner_rate_hz:  float = 20.0
-    astar_weight:     float = 1.0   # f = g + w*h (1.0=optimal, >1 suppresses detours)
+    lookahead_cells: int = 20
 
     # Stale-data handling
     pose_timeout_s: float = 0.5
-
-    # Costmap
-    base_cost:  float = 1.0
-    obs_cost:   float = 9999.0
-    decay_rate: float = 0.3    # fraction reduced per BFS step from obs_cost
 
 
 def _load_nav_config() -> NavigationProviderConfig:
@@ -122,11 +116,6 @@ def _load_nav_config() -> NavigationProviderConfig:
         arrival_tol        = _g("arrival",  "tol",                 0.25),
         yaw_tol            = _g("arrival",  "yaw_tol",             0.10),
         lookahead_cells    = _g("path", "lookahead_cells",  20),
-        planner_rate_hz    = _g("path", "planner_rate_hz",  20.0),
-        astar_weight       = _g("path", "astar_weight",      2.0),
-        base_cost  = _g("costmap", "base_cost",  1.0),
-        obs_cost   = _g("costmap", "obs_cost",   9999.0),
-        decay_rate = _g("costmap", "decay_rate", 0.3),
         locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
     )
 
@@ -163,17 +152,16 @@ class NavigationProvider:
         self._locations: Dict[str, Tuple[float, float, Optional[float]]] = {}
         self._load_locations()
 
+        # Route-planner C++ pipeline (PointCloud2 → EDT Costmap → A*)
+        if not rp.ok():
+            rp.init([])
+        self._pipeline = rp.RoutePlannerPipeline()
+
         # Goal (written by submit_nav_subtask, read by worker)
         self._goal_lock = threading.Lock()
         self._goal:     Optional[Tuple[float, float]] = None
         self._goal_yaw: Optional[float] = None
         self._goal_id:  Optional[str] = None
-
-        # Planned path (written and read exclusively by worker thread)
-        self._path:       Optional[List[Tuple[int, int]]] = None
-        self._path_goal:  Optional[Tuple[float, float]]   = None
-        self._path_grid:  object = None          # OccupancyGrid used for this path
-        self._last_plan_t: float = 0.0
 
         # E-STOP flag (written by estop callback, read by worker)
         self._estop_active: bool = False
@@ -200,6 +188,7 @@ class NavigationProvider:
         if self._thread is not None and self._thread.is_alive():
             return
 
+        self._pipeline.start()
         self._unitree_g1.register_estop_callback(self._on_estop)
 
         self._stop_evt.clear()
@@ -222,6 +211,7 @@ class NavigationProvider:
                 _log.warning("NavigationProvider: worker thread did not stop in 2s")
             self._thread = None
 
+        self._pipeline.stop()
         self._unitree_g1.unregister_estop_callback(self._on_estop)
         self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
 
@@ -337,18 +327,12 @@ class NavigationProvider:
             _log.info("NavigationProvider: arrived at %s", goal_id)
             return
 
-        # Plan (or re-plan) path when needed
-        occ_cache = self._unitree_g1.occupancy
-        need_plan = (
-            self._path is None
-            or self._path_goal != goal
-            or (now - self._last_plan_t) >= 1.0 / self._config.planner_rate_hz
-        )
-        if need_plan and not occ_cache.stale(now, 0.5) and occ_cache.value is not None:
-            self._do_plan(occ_cache.value, rx, ry, gx, gy, goal)
+        # Update pipeline goal and get latest path
+        self._pipeline.set_goal(gx, gy)
+        path = self._pipeline.get_path()
 
-        # Drive toward lookahead target — stop if no path available
-        if self._path is None or self._path_grid is None:
+        # Drive toward lookahead target — stop if no path available yet
+        if not path:
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(
                 t_monotonic=now, mode="PLANNING",
@@ -356,7 +340,7 @@ class NavigationProvider:
             ))
             return
 
-        tx, ty = self._get_lookahead_target(rx, ry)
+        tx, ty = self._get_lookahead_target(rx, ry, path)
         dx_t = tx - rx
         dy_t = ty - ry
         td   = math.sqrt(dx_t * dx_t + dy_t * dy_t)
@@ -389,56 +373,28 @@ class NavigationProvider:
         ))
 
     # ------------------------------------------------------------------
-    # Internal: path planning
+    # Internal: path following
     # ------------------------------------------------------------------
 
-    def _do_plan(self, grid, rx: float, ry: float,
-                 gx: float, gy: float, goal: Tuple[float, float]) -> None:
-        t0 = time.monotonic()
-        cfg        = self._config
-        costmap    = inflate_costmap(grid, cfg.base_cost, cfg.obs_cost, cfg.decay_rate)
-        start_cell = m2c(grid, rx, ry)
-        goal_cell  = m2c(grid, gx, gy)
-        path       = astar(costmap, start_cell, goal_cell, cfg.obs_cost, cfg.astar_weight)
-
-        elapsed = time.monotonic() - t0
-        if path:
-            self._path       = path
-            self._path_goal  = goal
-            self._path_grid  = grid
-            self._last_plan_t = time.monotonic()
-            _log.info(
-                "NavigationProvider: path planned (%d cells, %.3fs)",
-                len(path), elapsed,
-            )
-        else:
-            _log.warning(
-                "NavigationProvider: A* failed (%.3fs) start=%s goal=%s",
-                elapsed, start_cell, goal_cell,
-            )
-
-    def _get_lookahead_target(self, rx: float, ry: float) -> Tuple[float, float]:
+    def _get_lookahead_target(self, rx: float, ry: float,
+                              path: List[Tuple[float, float]]) -> Tuple[float, float]:
         """
-        Project robot onto path, return the cell `lookahead_cells` ahead
-        as map-frame (x, y).  Collapses to goal cell when near the end.
+        Project robot onto path (map-frame waypoints), return the point
+        `lookahead_cells` ahead. Collapses to the last waypoint near the end.
         """
-        path  = self._path
-        grid  = self._path_grid
-        n     = len(path)
-        look  = self._config.lookahead_cells
+        n    = len(path)
+        look = self._config.lookahead_cells
 
-        # Find closest path cell to current robot position
         best_idx  = 0
         best_dist = float('inf')
-        for i, (r, c) in enumerate(path):
-            px, py = c2m(grid, r, c)
+        for i, (px, py) in enumerate(path):
             d = (px - rx)**2 + (py - ry)**2
             if d < best_dist:
                 best_dist = d
                 best_idx  = i
 
         target_idx = min(best_idx + look, n - 1)
-        return c2m(grid, *path[target_idx])
+        return path[target_idx]
 
     # ------------------------------------------------------------------
     # Internal: helpers
