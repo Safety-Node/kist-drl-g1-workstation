@@ -86,7 +86,7 @@ class NavigationProviderConfig:
     yaw_tol:     float = 0.10   # rad — final heading tolerance (~6°)
 
     # Path following
-    lookahead_cells: int = 20
+    lookahead_cells: int = 2
 
     # Stale-data handling
     pose_timeout_s: float = 0.5
@@ -115,7 +115,7 @@ def _load_nav_config() -> NavigationProviderConfig:
         kp_yaw             = _g("gains",    "kp_yaw",              1.5),
         arrival_tol        = _g("arrival",  "tol",                 0.25),
         yaw_tol            = _g("arrival",  "yaw_tol",             0.10),
-        lookahead_cells    = _g("path", "lookahead_cells",  20),
+        lookahead_cells    = _g("path", "lookahead_cells",  2),
         locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
     )
 
