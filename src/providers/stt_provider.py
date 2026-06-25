@@ -22,13 +22,16 @@ backend exercises the filter chain without live mic; GOOGLE_CLOUD will
 use the same path once TASK-41 lands).
 """
 
+import base64
+import json
 import logging
+import os
 import queue
 import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import numpy as np
 from scipy.signal import butter, sosfilt
@@ -37,6 +40,18 @@ from .singleton import singleton
 from .unitree_g1_provider import UnitreeG1Provider
 
 _MAX_RECONNECT = 10
+
+
+def _load_google_credentials() -> Optional[Any]:
+    """Return a google.oauth2 Credentials object from GOOGLE_APPLICATION_CREDENTIALS_B64,
+    or None to let the SDK auto-discover via GOOGLE_APPLICATION_CREDENTIALS path.
+    """
+    b64 = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_B64")
+    if not b64:
+        return None
+    from google.oauth2 import service_account
+    info = json.loads(base64.b64decode(b64))
+    return service_account.Credentials.from_service_account_info(info)
 
 
 class StreamingSpeechFilter:
@@ -442,7 +457,10 @@ class STTProvider:
 
         # SpeechClient 한 번만 생성 — gRPC 채널 재사용.
         # 에러로 client 자체가 망가진 경우에만 재생성.
-        client = speech.SpeechClient()
+        credentials = _load_google_credentials()
+        def _new_client():
+            return speech.SpeechClient(credentials=credentials) if credentials else speech.SpeechClient()
+        client = _new_client()
         recognition_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=self._config.sample_rate_hz,
@@ -521,7 +539,7 @@ class STTProvider:
                 backoff = min(backoff * 2, 30.0)
                 # gRPC 채널 수준 에러면 client 재생성
                 try:
-                    client = speech.SpeechClient()
+                    client = _new_client()
                 except Exception:
                     pass
 

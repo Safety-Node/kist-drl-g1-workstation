@@ -4,3 +4,6 @@
 [submodule "src/ubtech"]
 	path = src/ubtech
 	url = https://github.com/OpenMind/ubtech.git
+[submodule "third_party/route_planner"]
+	path = third_party/route_planner
+	url = https://github.com/hanyu462/route-planner.git
