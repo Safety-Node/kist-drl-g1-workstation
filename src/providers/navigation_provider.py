@@ -86,7 +86,9 @@ class NavigationProviderConfig:
     yaw_tol:     float = 0.10   # rad — final heading tolerance (~6°)
 
     # Path following
-    lookahead_cells: int = 2
+    lookahead_cells:          int   = 8
+    target_ema_alpha:         float = 0.35   # 0=frozen, 1=no smoothing
+    path_update_every_n_ticks: int  = 5      # refresh path from C++ every N ticks
 
     # Stale-data handling
     pose_timeout_s: float = 0.5
@@ -115,7 +117,9 @@ def _load_nav_config() -> NavigationProviderConfig:
         kp_yaw             = _g("gains",    "kp_yaw",              1.5),
         arrival_tol        = _g("arrival",  "tol",                 0.25),
         yaw_tol            = _g("arrival",  "yaw_tol",             0.10),
-        lookahead_cells    = _g("path", "lookahead_cells",  2),
+        lookahead_cells           = _g("path", "lookahead_cells",           8),
+        target_ema_alpha          = _g("path", "target_ema_alpha",          0.35),
+        path_update_every_n_ticks = _g("path", "path_update_every_n_ticks", 5),
         locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
     )
 
@@ -162,6 +166,13 @@ class NavigationProvider:
         self._goal:     Optional[Tuple[float, float]] = None
         self._goal_yaw: Optional[float] = None
         self._goal_id:  Optional[str] = None
+
+        # Path-following smoothing state (written/read only by worker thread)
+        self._smooth_tx:    Optional[float] = None
+        self._smooth_ty:    Optional[float] = None
+        self._cached_path:  Optional[List]  = None
+        self._path_tick_count: int          = 0
+        self._last_set_goal: Optional[Tuple[float, float]] = None
 
         # E-STOP flag (written by estop callback, read by worker)
         self._estop_active: bool = False
@@ -276,6 +287,10 @@ class NavigationProvider:
 
         if goal is None:
             self._path = None
+            self._smooth_tx = self._smooth_ty = None
+            self._cached_path = None
+            self._path_tick_count = 0
+            self._last_set_goal = None
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(t_monotonic=time.monotonic()))
             return
@@ -320,6 +335,10 @@ class NavigationProvider:
                 self._goal_yaw = None
                 self._goal_id  = None
             self._path = None
+            self._smooth_tx = self._smooth_ty = None
+            self._cached_path = None
+            self._path_tick_count = 0
+            self._last_set_goal = None
             self._unitree_g1.publish_twist(0.0, 0.0, 0.0)
             self._set_state(NavigationState(
                 t_monotonic=now, mode="ARRIVED", goal_id=goal_id,
@@ -327,9 +346,23 @@ class NavigationProvider:
             _log.info("NavigationProvider: arrived at %s", goal_id)
             return
 
-        # Update pipeline goal and get latest path
-        self._pipeline.set_goal(gx, gy)
-        path = self._pipeline.get_path()
+        # Only call set_goal when goal actually changes to avoid unnecessary replanning
+        if (gx, gy) != self._last_set_goal:
+            self._pipeline.set_goal(gx, gy)
+            self._last_set_goal = (gx, gy)
+            self._cached_path = None
+            self._path_tick_count = 0
+            self._smooth_tx = self._smooth_ty = None
+
+        # Refresh path from C++ pipeline at reduced rate to suppress oscillation
+        self._path_tick_count += 1
+        if self._path_tick_count >= self._config.path_update_every_n_ticks or self._cached_path is None:
+            fresh = self._pipeline.get_path()
+            if fresh:
+                self._cached_path = fresh
+            self._path_tick_count = 0
+
+        path = self._cached_path
 
         # Drive toward lookahead target — stop if no path available yet
         if not path:
@@ -341,6 +374,15 @@ class NavigationProvider:
             return
 
         tx, ty = self._get_lookahead_target(rx, ry, path)
+
+        # EMA smoothing on lookahead target to dampen high-frequency path jitter
+        alpha = self._config.target_ema_alpha
+        if self._smooth_tx is None:
+            self._smooth_tx, self._smooth_ty = tx, ty
+        else:
+            self._smooth_tx = alpha * tx + (1.0 - alpha) * self._smooth_tx
+            self._smooth_ty = alpha * ty + (1.0 - alpha) * self._smooth_ty
+        tx, ty = self._smooth_tx, self._smooth_ty
         dx_t = tx - rx
         dy_t = ty - ry
         td   = math.sqrt(dx_t * dx_t + dy_t * dy_t)
