@@ -5,11 +5,13 @@ TeleopControlLoop
     G1ObsProvider.update()
     → TeleopPolicyProvider.build()  (encoder 1762→64, decoder 994→29)
     → q_target[29]
-    → JointCmd (1 step)
+    → JointCmd (29 joints, 1 step)
     → UnitreeG1Provider.publish_joint_cmd_low()
     → onboard motor_controller → Unitree SDK PD 제어
 
-arm_only=True 시 팔 관절(15-28)만 전송 — 하체는 loco SDK 가 담당.
+arm_only=True 시 하체(0-11) q=0, kp=kd=0 으로 마스킹 — arm_sdk 펌웨어가
+하체에 토크를 인가하지 않으므로 loco SDK 가 계속 하체를 담당.
+arm_only=False 시 전체 29 관절 policy 출력 그대로 전송 (whole-body).
 
 사용법:
     loop = TeleopControlLoop(g1_provider, vr_coord, g1_obs)
@@ -35,12 +37,7 @@ logger = logging.getLogger(__name__)
 
 CONTROL_HZ = 50
 _CHUNK_ID_MAX = 255
-
-# 팔 관절 인덱스 (MuJoCo 순서, waist 포함)
-_ARM_INDICES = list(range(12, 29))   # 12-14 waist, 15-28 arms
-_ARM_NAMES = [ALL_JOINT_NAMES[i] for i in _ARM_INDICES]
-_ARM_KPS   = KPS[_ARM_INDICES]
-_ARM_KDS   = KDS[_ARM_INDICES]
+_N_LOWER = 12  # 하체 관절 수 (MuJoCo 0-11)
 
 
 def _make_joint_cmd(
@@ -70,9 +67,12 @@ class TeleopControlLoop:
     """
     VR teleop 50 Hz 제어 루프.
 
-    arm_only=True: 팔 관절(waist+arms, 17 joints)만 전송.
-                   하체는 loco SDK 가 별도로 제어.
-    arm_only=False: 전체 29 관절 전송 (whole-body policy).
+    항상 29 관절 전체를 전송한다.
+
+    arm_only=True: 하체(0-11) q=0, kp=kd=0 마스킹.
+                   arm_sdk 펌웨어는 하체에 토크를 인가하지 않으므로
+                   loco SDK 가 계속 하체를 제어할 수 있다.
+    arm_only=False: policy 출력 29 관절 그대로 전송 (whole-body).
     """
 
     def __init__(
@@ -102,7 +102,7 @@ class TeleopControlLoop:
     def run(self) -> None:
         """블로킹 제어 루프. Ctrl-C 또는 stop() 으로 종료."""
         self._running = True
-        mode_str = "arm-only" if self._arm_only else "whole-body"
+        mode_str = "arm-only (lower body masked)" if self._arm_only else "whole-body"
         logger.info("TeleopControlLoop: started at %.0f Hz (%s)", self._hz, mode_str)
         deadline = time.monotonic()
 
@@ -151,14 +151,17 @@ class TeleopControlLoop:
         self._last_out = out
         self._step_count += 1
 
-        if self._arm_only:
-            q = out.q_target[_ARM_INDICES]
-            cmd = _make_joint_cmd(_ARM_NAMES, q, _ARM_KPS, _ARM_KDS, self._chunk_id)
-        else:
-            cmd = _make_joint_cmd(
-                list(ALL_JOINT_NAMES), out.q_target, KPS, KDS, self._chunk_id,
-            )
+        q   = out.q_target.copy()
+        kps = KPS.copy()
+        kds = KDS.copy()
 
+        if self._arm_only:
+            # 하체(0-11): q=0, kp=kd=0 → arm_sdk 가 토크 인가 안 함
+            q[:_N_LOWER]   = 0.0
+            kps[:_N_LOWER] = 0.0
+            kds[:_N_LOWER] = 0.0
+
+        cmd = _make_joint_cmd(list(ALL_JOINT_NAMES), q, kps, kds, self._chunk_id)
         self._g1.publish_joint_cmd_low(cmd)
 
         self._chunk_id = (self._chunk_id % _CHUNK_ID_MAX) + 1
