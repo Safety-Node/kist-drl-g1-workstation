@@ -74,11 +74,15 @@ def _build_decoder_input(token, pos_all_10f, vel_all_10f, gravity_10f):
 
 
 def run_policy(encoder, decoder, enc_input, dec_extra):
-    """encoder → token → decoder → action → q_target."""
+    """encoder → token → decoder → action → q_target (arm_only 오버라이트 적용)."""
     token = encoder.run(None, {"obs_dict": enc_input[np.newaxis]})[0][0]
     dec_in = _build_decoder_input(token, *dec_extra)
     action = decoder.run(None, {"obs_dict": dec_in[np.newaxis]})[0][0]
     q_target = DEFAULT_ANGLES + action.astype(np.float32) * ACTION_SCALE
+
+    # arm_only 오버라이트: 하체(0-11) q=0 (kp=kd=0 이므로 실제 토크 없음)
+    q_target[:12] = 0.0
+
     return q_target, action
 
 
