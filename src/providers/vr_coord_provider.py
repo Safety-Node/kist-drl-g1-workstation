@@ -80,6 +80,12 @@ class VRCoordData:
     timestamp_ns: int
 
 
+def _yaw_only(q_wxyz: np.ndarray) -> np.ndarray:
+    """쿼터니언에서 yaw(Z축 회전)만 추출. 헤드셋 pitch/roll 무시."""
+    yaw = sRot.from_quat(q_wxyz, scalar_first=True).as_euler('xyz')[2]
+    return sRot.from_euler('z', yaw).as_quat(scalar_first=True)
+
+
 def _unity_to_robot(pose_unity: np.ndarray) -> tuple:
     """
     Unity frame 7-벡터 → Robot frame (pos, quat scalar-first).
@@ -179,7 +185,8 @@ class VRCoordProvider:
             def _apply(q_wxyz, offset_rot):
                 return (sRot.from_quat(q_wxyz, scalar_first=True) * offset_rot).as_quat(scalar_first=True)
 
-            pelvis_q_r  = _apply(h_q_r,  _OFFSET_ANCHOR)
+            # anchor: yaw만 사용 — 헤드셋 pitch/roll이 섞이면 목/손목 local 위치가 틀어짐
+            pelvis_q_r  = _apply(_yaw_only(h_q_r), _OFFSET_ANCHOR)
             lw_q_r_c    = _apply(lw_q_r, _OFFSET_LW)
             rw_q_r_c    = _apply(rw_q_r, _OFFSET_RW)
             neck_q_r_c  = _apply(h_q_r,  _OFFSET_NECK)
