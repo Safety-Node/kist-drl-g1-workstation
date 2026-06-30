@@ -38,16 +38,16 @@ _DT = 1.0 / CONTROL_HZ
 _CHUNK_ID_MAX = 255
 
 
-def _make_joint_cmd_chunk(
+def _make_joint_cmd(
     joint_names: list,
     q_target: np.ndarray,
     kps: np.ndarray,
     kds: np.ndarray,
     chunk_id: int,
 ) -> dict:
-    """q_target (29,) → JointCmdChunk (1 step)."""
+    """q_target (29,) → JointCmd (단일 스텝, onboard inbound_relay 타입)."""
     n = len(joint_names)
-    step = {
+    return {
         "joint_names": joint_names,
         "q":      q_target.tolist(),
         "dq":     [0.0] * n,
@@ -59,7 +59,6 @@ def _make_joint_cmd_chunk(
         "chunk_id":   chunk_id,
         "step_index": 0,
     }
-    return {"chunk_id": chunk_id, "steps": [step]}
 
 
 class TeleopControlLoop:
@@ -156,14 +155,14 @@ class TeleopControlLoop:
         self._last_out = out
         self._step_count += 1
 
-        chunk = _make_joint_cmd_chunk(
+        cmd = _make_joint_cmd(
             joint_names=list(ALL_JOINT_NAMES),
             q_target=out.q_target,
             kps=KPS,
             kds=KDS,
             chunk_id=self._chunk_id,
         )
-        self._g1.publish_joint_chunk_low(chunk)
+        self._g1.publish_joint_cmd_low(cmd)
 
         # chunk_id wrap: 1~255, 0 skip
         self._chunk_id = (self._chunk_id % _CHUNK_ID_MAX) + 1

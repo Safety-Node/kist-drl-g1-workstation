@@ -237,6 +237,7 @@ class UnitreeG1Provider:
 
         self._pub_arm = None
         self._pub_low = None
+        self._pub_low_cmd = None
         self._pub_loco = None
         self._pub_vel = None
         self._pub_audio_out = None
@@ -395,6 +396,11 @@ class UnitreeG1Provider:
             )
             self._pub_low = self._node.create_publisher(
                 JointCmdChunkMsg, "/bridge/cmd/low", _qos_rel_pub,
+            )
+            # Single-step JointCmd publisher — onboard inbound_relay subscribes
+            # to JointCmd (not JointCmdChunk) on /bridge/cmd/low.
+            self._pub_low_cmd = self._node.create_publisher(
+                JointCmdMsg, "/bridge/cmd/low", _qos_rel_pub,
             )
             self._pub_loco = self._node.create_publisher(
                 LocoCommandMsg, "/bridge/cmd/loco", _qos_rel_pub,
@@ -714,6 +720,34 @@ class UnitreeG1Provider:
             pub.publish(msg)
         except Exception:
             logging.exception("UnitreeG1Provider: failed to publish %s", topic)
+
+    def publish_joint_cmd_low(self, cmd: JointCmd) -> None:
+        """
+        Publish a single ``JointCmd`` (JointCmd type) to ``/bridge/cmd/low``.
+
+        onboard inbound_relay 가 JointCmd 타입을 구독하므로 teleop 제어에 사용.
+        """
+        if not self._connected or self._pub_low_cmd is None:
+            logging.warning("UnitreeG1Provider: not started, dropping joint_cmd_low")
+            return
+        if not self.comm_bridge_alive():
+            logging.warning("UnitreeG1Provider: comm_bridge not alive, dropping joint_cmd_low")
+            return
+        try:
+            msg = JointCmdMsg()
+            msg.joint_names = list(cmd["joint_names"])
+            msg.q = list(cmd["q"])
+            msg.dq = list(cmd["dq"])
+            msg.kp = list(cmd["kp"])
+            msg.kd = list(cmd["kd"])
+            msg.tau_ff = list(cmd["tau_ff"])
+            msg.mode = int(cmd["mode"])
+            msg.weight = float(cmd["weight"])
+            msg.chunk_id = int(cmd["chunk_id"])
+            msg.step_index = int(cmd["step_index"])
+            self._pub_low_cmd.publish(msg)
+        except Exception:
+            logging.exception("UnitreeG1Provider: failed to publish joint_cmd_low")
 
     def publish_loco_cmd(self, loco_command: LocoCommand) -> None:
         """
