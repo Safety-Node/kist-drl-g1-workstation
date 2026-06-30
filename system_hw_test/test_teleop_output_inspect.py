@@ -31,6 +31,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=0, help="출력 횟수 (0=무한)")
     parser.add_argument("--hz", type=float, default=2.0, help="출력 주기 (기본 2Hz = 0.5s 간격)")
+    parser.add_argument("--vr-raw", action="store_true", help="VR 3-point local target 값도 출력")
     args = parser.parse_args()
 
     from providers.pico_reader_provider import PicoReaderProvider
@@ -39,6 +40,7 @@ def main():
     from providers.teleop_encoder_input_provider import TeleopEncoderInputProvider
     from providers.teleop_policy_provider import TeleopPolicyProvider
     from providers.policy_params import DEFAULT_ANGLES
+    VR_POS_LABELS = ["LW_x", "LW_y", "LW_z", "RW_x", "RW_y", "RW_z", "NK_x", "NK_y", "NK_z"]
 
     # ── PICO ──────────────────────────────────────────────────────────────
     PicoReaderProvider.reset()
@@ -113,6 +115,14 @@ def main():
                 # delta 행
                 print(f"  {'Δ':>4}  {'':>3} {'':>3}  " +
                       "  ".join(f"{d:>+8.3f}" for d in delta))
+
+                # VR 3-point 위치 (anchor local)
+                if args.vr_raw and out.vr_ok:
+                    vr_data = vr_coord.get_latest()
+                    if vr_data is not None:
+                        pos = vr_data.vr_3point_local_target
+                        print("  VR pos: " + "  ".join(
+                            f"{VR_POS_LABELS[i]:>6}={pos[i]:+.3f}" for i in range(9)))
 
             step += 1
             sleep = deadline - time.monotonic()

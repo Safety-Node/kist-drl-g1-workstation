@@ -21,6 +21,12 @@ teleop encoder 에 넣을 vr_3point_local_target (9,) + vr_3point_local_orn_targ
     * HEADSET_TO_PELVIS_Y 는 Unity Y (up) 방향 오프셋 (기본 0.70 m)
     * XRT SDK 원점이 헤드셋 초기 위치이므로, 초기화 시 캘리브레이션 권장
 
+회전 오프셋 (원본 GearSonic SMPL joint frame 정렬):
+    Anchor/Root : yaw -90°  (SMPL 골반 frame → robot anchor frame)
+    L-Wrist     : roll +90°
+    R-Wrist     : roll -90°, yaw +180°
+    Neck        : yaw -90°
+
 출력:
     vr_3point_local_target    ndarray (9,)   = [lw_pos, rw_pos, neck_pos] in anchor local
     vr_3point_local_orn_target ndarray (12,)  = [lw_q, rw_q, neck_q] scalar-first, anchor local
@@ -45,6 +51,13 @@ _Q = np.array([[-1, 0, 0], [0, 0, 1], [0, 1, 0]], dtype=np.float64)
 # Unity Y-up 기준이면 양수 (머리가 골반보다 Y+ 에 있음)
 # XRT SDK Y-down 기준이면 음수로 변경 필요
 _HEADSET_TO_PELVIS_Y_DEFAULT = 0.70
+
+# 원본 GearSonic SMPL joint frame 정렬용 회전 오프셋 (post-multiply = 내재 회전)
+# gear_sonic/scripts/pico_manager_thread_server.py 의 OFFSETS 와 동일
+_OFFSET_ANCHOR = sRot.from_euler("xyz", [0,   0, -90], degrees=True)   # Root/Pelvis
+_OFFSET_LW     = sRot.from_euler("xyz", [90,  0,   0], degrees=True)   # L-Wrist
+_OFFSET_RW     = sRot.from_euler("xyz", [-90, 0, 180], degrees=True)   # R-Wrist
+_OFFSET_NECK   = sRot.from_euler("xyz", [0,   0, -90], degrees=True)   # Neck
 
 
 @dataclass
@@ -161,15 +174,21 @@ class VRCoordProvider:
             pelvis_unity[1] -= self._headset_to_pelvis_y
             pelvis_pos_r = _Q @ pelvis_unity
 
-            # anchor 방향 = 골반 방향 ≈ headset 방향 (단순화)
-            # 추후: robot IMU 방향 또는 headset yaw-only 사용 가능
-            pelvis_q_r = h_q_r
+            # 3. SMPL joint frame 정렬 오프셋 적용 (post-multiply = 내재 회전)
+            #    원본 GearSonic SMPL 학습 데이터와 좌표계 맞춤
+            def _apply(q_wxyz, offset_rot):
+                return (sRot.from_quat(q_wxyz, scalar_first=True) * offset_rot).as_quat(scalar_first=True)
 
-            # 3. anchor-local 기준화
+            pelvis_q_r  = _apply(h_q_r,  _OFFSET_ANCHOR)
+            lw_q_r_c    = _apply(lw_q_r, _OFFSET_LW)
+            rw_q_r_c    = _apply(rw_q_r, _OFFSET_RW)
+            neck_q_r_c  = _apply(h_q_r,  _OFFSET_NECK)
+
+            # 4. anchor-local 기준화
             target, orn = _make_3point_local(
-                h_pos_r, h_q_r,
-                lw_pos_r, lw_q_r,
-                rw_pos_r, rw_q_r,
+                h_pos_r, neck_q_r_c,
+                lw_pos_r, lw_q_r_c,
+                rw_pos_r, rw_q_r_c,
                 pelvis_pos_r, pelvis_q_r,
             )
 
@@ -177,9 +196,9 @@ class VRCoordProvider:
                 headset_pos_robot=h_pos_r,
                 headset_quat_robot=h_q_r,
                 lw_pos_robot=lw_pos_r,
-                lw_quat_robot=lw_q_r,
+                lw_quat_robot=lw_q_r_c,
                 rw_pos_robot=rw_pos_r,
-                rw_quat_robot=rw_q_r,
+                rw_quat_robot=rw_q_r_c,
                 pelvis_pos_robot=pelvis_pos_r,
                 vr_3point_local_target=target,
                 vr_3point_local_orn_target=orn,
