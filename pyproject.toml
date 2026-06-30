@@ -44,6 +44,7 @@ dependencies = [
     "google-cloud-speech>=2.21.0",
     "scipy>=1.15.3",
     "scikit-image>=0.25.2",
+    "onnxruntime>=1.23.2",
 ]
 
 [project.optional-dependencies]
