@@ -37,6 +37,7 @@ def main(argv=None) -> int:
     parser.add_argument("--pico-timeout", type=float, default=15.0, help="PICO 연결 대기 타임아웃 (초)")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--dry-run", action="store_true", help="프로바이더 초기화만 하고 제어 루프 미실행")
+    parser.add_argument("--arm-only", action="store_true", help="팔 관절(waist+arms, 17개)만 전송 — 하체는 loco SDK 담당")
     args = parser.parse_args(argv)
 
     _setup_logging(args.log_level)
@@ -87,7 +88,7 @@ def main(argv=None) -> int:
         return 0
 
     # ── 4. 제어 루프 ──────────────────────────────────────────────────
-    loop = TeleopControlLoop(g1, vr_coord, g1_obs, control_hz=args.hz)
+    loop = TeleopControlLoop(g1, vr_coord, g1_obs, control_hz=args.hz, arm_only=args.arm_only)
 
     def _on_signal(sig, _frame):
         logger.warning("신호 %d 수신 — 종료 중...", sig)
