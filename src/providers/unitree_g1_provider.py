@@ -236,7 +236,6 @@ class UnitreeG1Provider:
         self._sub_estop = None
 
         self._pub_arm = None
-        self._pub_low = None
         self._pub_low_cmd = None
         self._pub_loco = None
         self._pub_vel = None
@@ -394,11 +393,7 @@ class UnitreeG1Provider:
             self._pub_arm = self._node.create_publisher(
                 JointCmdChunkMsg, "/bridge/cmd/arm", _qos_rel_pub,
             )
-            self._pub_low = self._node.create_publisher(
-                JointCmdChunkMsg, "/bridge/cmd/low", _qos_rel_pub,
-            )
-            # Single-step JointCmd publisher — onboard inbound_relay subscribes
-            # to JointCmd (not JointCmdChunk) on /bridge/cmd/low.
+            # onboard inbound_relay subscribes to JointCmd (not JointCmdChunk)
             self._pub_low_cmd = self._node.create_publisher(
                 JointCmdMsg, "/bridge/cmd/low", _qos_rel_pub,
             )
@@ -683,15 +678,12 @@ class UnitreeG1Provider:
         self._publish_joint_chunk(self._pub_arm, "/bridge/cmd/arm", chunk)
 
     def publish_joint_chunk_low(self, chunk: JointCmdChunk) -> None:
-        """
-        Publish a ``JointCmdChunk`` (rt/lowcmd path) to ``/bridge/cmd/low``.
-
-        2026-05-26 — wire unit is the chunk. NEW
-        2026-05-22 (whole-body VLA walking) topic; weight ignored on NX
-        side. NX motor_controller unpacks ``chunk.steps`` into
-        ``joint_buf`` and paces at 100 Hz.
-        """
-        self._publish_joint_chunk(self._pub_low, "/bridge/cmd/low", chunk)
+        """Deprecated: onboard inbound_relay uses JointCmd, not JointCmdChunk.
+        Use publish_joint_cmd_low() instead."""
+        logging.warning(
+            "UnitreeG1Provider: publish_joint_chunk_low is deprecated — "
+            "use publish_joint_cmd_low() (JointCmd type)"
+        )
 
     def _publish_joint_chunk(self, pub, topic: str, chunk: JointCmdChunk) -> None:
         """Shared serialisation + publish for arm/low chunk paths."""
