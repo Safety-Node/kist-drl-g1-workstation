@@ -40,7 +40,7 @@
       name: "go_table",
       on_create: [{ speak: "식탁으로 갑니다." }],
       on_start:  [{ move: "Walk to the table.", delay: 1.0 }],
-      success: { type: "delay", seconds: 25.0, timeout_s: 35.0 },
+      success: { type: "delay", seconds: 24.0, timeout_s: 30.0 },
       on_success: [{ speak: "식탁에 도착했습니다." }],
       on_fail:    [{ speak: "식탁 이동에 실패했습니다." }],
     },
