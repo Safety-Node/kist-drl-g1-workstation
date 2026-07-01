@@ -105,13 +105,12 @@ class PicoVRReaderProvider:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
             if self._thread.is_alive():
-                logger.warning("PicoVRReaderProvider: 스레드가 2s 내에 종료되지 않음")
+                logger.warning("PicoVRReaderProvider: thread did not stop within 2s")
         self._thread = None
-        if _XRT_AVAILABLE and xrt is not None:
-            try:
-                xrt.close()
-            except Exception:
-                pass
+        try:
+            xrt.close()
+        except Exception:
+            pass
         with self._lock:
             self._connected = False
         logger.info("PicoVRReaderProvider stopped")
@@ -120,8 +119,8 @@ class PicoVRReaderProvider:
     # Data access
     # ------------------------------------------------------------------
 
-    def get_latest(self) -> Optional[VRBodySample]:
-        """최신 VRBodySample 반환. 데이터 없거나 연결 끊기면 None."""
+    @property
+    def data(self) -> Optional[VRBodySample]:
         with self._lock:
             return self._latest
 
@@ -176,7 +175,7 @@ class PicoVRReaderProvider:
                 self._last_new_data_mono = now_mono
 
             except Exception:
-                logger.exception("PicoVRReaderProvider: get_body_joints_pose 오류")
+                logger.exception("PicoVRReaderProvider: get_body_joints_pose error")
 
             now = time.time()
             if now - last_log >= _LOG_INTERVAL_S:
@@ -193,7 +192,7 @@ class PicoVRReaderProvider:
             with self._lock:
                 if self._connected:
                     logger.warning(
-                        "PicoVRReaderProvider: %.1fs 동안 새 데이터 없음 — disconnected",
+                        "PicoVRReaderProvider: no new data for %.1fs — disconnected",
                         elapsed,
                     )
                 self._connected = False
