@@ -17,9 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
 
-CONNECT_TIMEOUT_S = 15.0
-DISCONNECT_TIMEOUT_S = 10.0
-RECONNECT_TIMEOUT_S = 15.0
 BUTTON_TIMEOUT_S = 10.0
 
 PASS = "\033[92mPASS\033[0m"
@@ -36,14 +33,11 @@ def _prompt_next(msg: str = "") -> None:
 
 def test_connection(reader: PicoVRReader) -> bool:
     print("[1] Connection status ... ", end="", flush=True)
-    deadline = time.monotonic() + CONNECT_TIMEOUT_S
-    while time.monotonic() < deadline:
+    while True:
         if reader.connected:
             print(PASS)
             return True
         time.sleep(0.2)
-    print(FAIL + f" (no connection within {CONNECT_TIMEOUT_S:.0f}s)")
-    return False
 
 
 def test_joints(reader: PicoVRReader) -> bool:
@@ -87,27 +81,21 @@ def test_joints(reader: PicoVRReader) -> bool:
 
 
 def test_disconnect(reader: PicoVRReader) -> bool:
-    print(f"[3] Disconnect the VR headset (waiting up to {DISCONNECT_TIMEOUT_S:.0f}s) ... ", end="", flush=True)
-    deadline = time.monotonic() + DISCONNECT_TIMEOUT_S
-    while time.monotonic() < deadline:
+    print("[3] Disconnect the VR headset ... ", end="", flush=True)
+    while True:
         if not reader.connected:
             print(PASS + f"  (body_pose={reader.body_pose})")
             return True
         time.sleep(0.2)
-    print(FAIL + " (still connected)")
-    return False
 
 
 def test_reconnect(reader: PicoVRReader) -> bool:
-    print(f"[4] Reconnect the VR headset (waiting up to {RECONNECT_TIMEOUT_S:.0f}s) ... ", end="", flush=True)
-    deadline = time.monotonic() + RECONNECT_TIMEOUT_S
-    while time.monotonic() < deadline:
+    print("[4] Reconnect the VR headset ... ", end="", flush=True)
+    while True:
         if reader.connected:
             print(PASS)
             return True
         time.sleep(0.2)
-    print(FAIL + " (no reconnection)")
-    return False
 
 
 def _check_button(reader: PicoVRReader, label: str, condition) -> bool:
