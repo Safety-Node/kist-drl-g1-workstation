@@ -31,7 +31,6 @@ from .policy_params import KPS, KDS
 from .teleop_encoder_input_provider import TeleopEncoderInputProvider
 from .teleop_policy_provider import TeleopPolicyProvider, TeleopPolicyOutput
 from .g1_obs_provider import G1ObsProvider
-from .vr_coord_provider import VRCoordProvider
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ class TeleopControlLoop:
     def __init__(
         self,
         g1_provider,
-        vr_coord: VRCoordProvider,
+        vr_coord,  # TODO: replace with GearSonic VR input
         g1_obs: G1ObsProvider,
         model_dir: Optional[str] = None,
         control_hz: float = CONTROL_HZ,

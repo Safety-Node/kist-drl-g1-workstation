@@ -43,16 +43,15 @@ def main(argv=None) -> int:
     _setup_logging(args.log_level)
     logger = logging.getLogger("run_teleop")
 
-    from providers.pico_reader_provider import PicoReaderProvider
-    from providers.vr_coord_provider import VRCoordProvider
+    # TODO: replace with GearSonic VR pipeline
+    from providers.pico_vr.reader import PicoVRReader
     from providers.unitree_g1_provider import UnitreeG1Provider
     from providers.g1_obs_provider import G1ObsProvider
     from providers.teleop_control_loop import TeleopControlLoop
 
     # ── 1. PICO ───────────────────────────────────────────────────────
     logger.info("PICO 초기화 중...")
-    PicoReaderProvider.reset()
-    pico = PicoReaderProvider()
+    pico = PicoVRReader()
     pico.start()
 
     logger.info("PICO 연결 대기 (최대 %.0fs)...", args.pico_timeout)
@@ -65,7 +64,7 @@ def main(argv=None) -> int:
         return 1
     logger.info("PICO 연결됨")
 
-    vr_coord = VRCoordProvider()
+    vr_coord = None  # TODO: wire GearSonic VR coord provider
 
     # ── 2. G1 ─────────────────────────────────────────────────────────
     logger.info("UnitreeG1Provider 초기화 중...")

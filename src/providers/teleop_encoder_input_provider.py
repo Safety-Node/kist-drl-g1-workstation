@@ -29,7 +29,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from .vr_coord_provider import VRCoordProvider, VRCoordData
+# TODO: replace with GearSonic VR input provider
 from .g1_obs_provider import G1ObsProvider, G1ObsData
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class TeleopEncoderInputProvider:
         enc_input: TeleopEncoderInput | None = enc_prov.build()
     """
 
-    def __init__(self, vr_coord: VRCoordProvider, g1_obs: G1ObsProvider):
+    def __init__(self, vr_coord, g1_obs: G1ObsProvider):  # TODO: type vr_coord with GearSonic provider
         self._vr = vr_coord
         self._g1 = g1_obs
 
@@ -106,7 +106,8 @@ class TeleopEncoderInputProvider:
 
         반환: TeleopEncoderInput, 또는 VR+G1 모두 없을 때 None.
         """
-        vr_data: Optional[VRCoordData] = self._vr.get_latest()
+        # TODO: replace with GearSonic VR data
+        vr_data = self._vr.get_latest() if self._vr is not None else None
         g1_data: Optional[G1ObsData] = self._g1.get_latest()
 
         vr_ok = vr_data is not None
