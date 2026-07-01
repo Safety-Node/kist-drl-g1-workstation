@@ -24,18 +24,6 @@ wget https://github.com/XR-Robotics/XRoboToolkit-PC-Service/releases/download/v1
 sudo dpkg -i XRoboToolkit_PC_Service_1.0.0_ubuntu_22.04_amd64.deb
 ```
 
-**arm64 (Jetson Orin, etc.)**
-
-```bash
-sudo dpkg -i gear_sonic_deploy/thirdparty/roboticsservice_1.0.0.0_arm64.deb
-```
-
-설치 확인 및 실행:
-
-```bash
-ls /opt/apps/roboticsservice
-/opt/apps/roboticsservice/runService.sh
-```
 
 ### Installing xrobotoolkit_sdk
 
