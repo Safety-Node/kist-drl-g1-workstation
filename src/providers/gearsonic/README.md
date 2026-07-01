@@ -2,13 +2,9 @@
 
 GearSonic wholebody control 파이프라인 — VR 입력을 encoder input (1762-dim)으로 변환한다.
 
-## Pipeline
+## Architecture
 
-```
-PicoVRReader  ──────────────────────────────────┐
-                                                 ├──▶ obs_*.py ──▶ encoder.onnx ──▶ decoder.onnx ──▶ q_target [29]
-UnitreeG1Provider ──▶ G1ObsProvider ────────────┘
-```
+![architecture](docs/gearsonic_architecture.png)
 
 ## Encoder Modes
 
@@ -18,24 +14,9 @@ UnitreeG1Provider ──▶ G1ObsProvider ────────────�
 | 1 | `upperbody` | VR 3-point (wrist×2 + neck) | G1 하체 실측 |
 | 2 | `wholebody` | SMPL 전신 트래킹 | SMPL 전신 트래킹 |
 
-## Encoder Input Layout (1762-dim)
+## Encoder Input Layout
 
-| 범위 | 필드 | 크기 | 활성 모드 |
-|---|---|---|---|
-| `[0:4]` | `encoder_mode_4` | 4 | 전체 |
-| `[4:294]` | `motion_joint_positions_10frame_step5` | 290 | g1 |
-| `[294:584]` | `motion_joint_velocities_10frame_step5` | 290 | g1 |
-| `[584:594]` | `motion_root_z_position_10frame_step5` | 10 | g1 |
-| `[594:595]` | `motion_root_z_position` | 1 | g1 |
-| `[595:601]` | `motion_anchor_orientation` | 6 | upperbody |
-| `[601:661]` | `motion_anchor_orientation_10frame_step5` | 60 | g1 |
-| `[661:781]` | `motion_joint_positions_lowerbody_10frame_step5` | 120 | upperbody |
-| `[781:901]` | `motion_joint_velocities_lowerbody_10frame_step5` | 120 | upperbody |
-| `[901:910]` | `vr_3point_local_target` | 9 | upperbody |
-| `[910:922]` | `vr_3point_local_orn_target` | 12 | upperbody |
-| `[922:1642]` | `smpl_joints_10frame_step1` | 720 | wholebody |
-| `[1642:1702]` | `smpl_anchor_orientation_10frame_step1` | 60 | wholebody |
-| `[1702:1762]` | `motion_joint_positions_wrists_10frame_step1` | 60 | wholebody |
+상세 레이아웃: [docs/encoder_input_config.md](docs/encoder_input_config.md)
 
 ## Files
 
