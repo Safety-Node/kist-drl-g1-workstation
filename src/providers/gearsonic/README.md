@@ -26,12 +26,3 @@ GearSonic wholebody control pipeline — converts VR input into encoder input (1
 
 See [docs/dev.md](docs/dev.md)
 
-## Files
-
-| file | role |
-|---|---|
-| `three_point_pose.py` | SMPL (24,7) → VR 3-point (3,7) transform + calibration |
-| `obs_builder_base.py` | common interface for encoder input assembly |
-| `obs_upperbody.py` | mode 1: VR 3-point + G1 lower body → 1762-dim |
-| `obs_wholebody.py` | mode 2: SMPL full body tracking → 1762-dim |
-
