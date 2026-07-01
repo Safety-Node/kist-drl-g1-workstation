@@ -86,6 +86,65 @@ def _yaw_only(q_wxyz: np.ndarray) -> np.ndarray:
     return sRot.from_euler('z', yaw).as_quat(scalar_first=True)
 
 
+def _smpl_to_3pt_local(body_poses_unity: np.ndarray) -> tuple:
+    """
+    SMPL 24관절(Unity frame, scalar-last) → encoder 입력 (target 9, orn 12).
+
+    GearSonic pico_manager_thread_server._process_3pt_pose() 와 동일한 파이프라인.
+
+    1. 전체 관절을 Robot frame 으로 변환
+    2. joint 0(Root), 22(L-Wrist), 23(R-Wrist), 12(Neck) 추출 + OFFSET 적용
+    3. Root 기준으로 상대 위치/방향 계산
+    4. [L-Wrist, R-Wrist, Neck] 순서로 flatten
+
+    Args:
+        body_poses_unity: (24, 7) float, [x,y,z,qx,qy,qz,qw] scalar-last, Unity frame
+    Returns:
+        (target (9,), orn_target (12,)) float32, scalar-first, Root local frame
+    """
+    body_poses_unity = body_poses_unity.copy()
+
+    # 1. Unity → Robot frame
+    robot_poses = np.zeros((body_poses_unity.shape[0], 7), dtype=np.float64)
+    for i in range(body_poses_unity.shape[0]):
+        p = body_poses_unity[i]
+        pos_r = _Q @ p[:3]
+        rot_r = sRot.from_matrix(_Q @ sRot.from_quat(p[3:], scalar_first=False).as_matrix() @ _Q.T)
+        robot_poses[i, :3] = pos_r
+        robot_poses[i, 3:] = rot_r.as_quat(scalar_first=True)  # scalar-first
+
+    # 2. 4 keypoints 추출 + OFFSET 적용 (scalar-last 로 임시 저장)
+    JOINT_MAP = {0: 0, 22: 1, 23: 2, 12: 3}
+    kp = np.zeros((4, 7), dtype=np.float64)
+    for smpl_idx, kp_idx in JOINT_MAP.items():
+        q_sf = robot_poses[smpl_idx, 3:]                             # scalar-first
+        q_sl = (sRot.from_quat(q_sf, scalar_first=True) * _OFFSETS[kp_idx]).as_quat(scalar_first=False)
+        kp[kp_idx, :3] = robot_poses[smpl_idx, :3]
+        kp[kp_idx, 3:] = q_sl                                        # scalar-last
+
+    # 3. Root-local 기준화 (scalar-last 기준 inv)
+    root_pos  = kp[0, :3].copy()
+    root_rot_inv = sRot.from_quat(kp[0, 3:]).inv()                  # scalar-last default
+    for i in range(1, 4):
+        kp[i, :3] = root_rot_inv.apply(kp[i, :3] - root_pos)
+        kp[i, 3:] = (root_rot_inv * sRot.from_quat(kp[i, 3:])).as_quat(scalar_first=True)
+        # kp[i, 3:] is now scalar-first
+
+    # 4. [L-Wrist(1), R-Wrist(2), Neck(3)] flatten
+    target = np.concatenate([kp[1, :3], kp[2, :3], kp[3, :3]]).astype(np.float32)
+    orn    = np.concatenate([kp[1, 3:], kp[2, 3:], kp[3, 3:]]).astype(np.float32)
+    return target, orn
+
+
+# SMPL keypoint 별 rotation offset (GearSonic OFFSETS 와 동일)
+_OFFSETS = [
+    sRot.from_euler("xyz", [0,   0, -90], degrees=True),   # 0: Root
+    sRot.from_euler("xyz", [90,  0,   0], degrees=True),   # 1: L-Wrist
+    sRot.from_euler("xyz", [-90, 0, 180], degrees=True),   # 2: R-Wrist
+    sRot.from_euler("xyz", [0,   0, -90], degrees=True),   # 3: Neck
+]
+
+
 def _unity_to_robot(pose_unity: np.ndarray) -> tuple:
     """
     Unity frame 7-벡터 → Robot frame (pos, quat scalar-first).
@@ -170,50 +229,83 @@ class VRCoordProvider:
             return None
 
         try:
-            # 1. Unity → Robot frame
-            h_pos_r, h_q_r = _unity_to_robot(raw.headset_pose)
-            lw_pos_r, lw_q_r = _unity_to_robot(raw.left_controller_pose)
-            rw_pos_r, rw_q_r = _unity_to_robot(raw.right_controller_pose)
-
-            # 2. 골반 위치 추정 (Unity Y 방향으로 offset 적용 후 변환)
-            pelvis_unity = raw.headset_pose[:3].copy()
-            pelvis_unity[1] -= self._headset_to_pelvis_y
-            pelvis_pos_r = _Q @ pelvis_unity
-
-            # 3. SMPL joint frame 정렬 오프셋 적용 (post-multiply = 내재 회전)
-            #    원본 GearSonic SMPL 학습 데이터와 좌표계 맞춤
-            def _apply(q_wxyz, offset_rot):
-                return (sRot.from_quat(q_wxyz, scalar_first=True) * offset_rot).as_quat(scalar_first=True)
-
-            # anchor: yaw만 사용 — 헤드셋 pitch/roll이 섞이면 목/손목 local 위치가 틀어짐
-            pelvis_q_r  = _apply(_yaw_only(h_q_r), _OFFSET_ANCHOR)
-            lw_q_r_c    = _apply(lw_q_r, _OFFSET_LW)
-            rw_q_r_c    = _apply(rw_q_r, _OFFSET_RW)
-            neck_q_r_c  = _apply(h_q_r,  _OFFSET_NECK)
-
-            # 4. anchor-local 기준화
-            target, orn = _make_3point_local(
-                h_pos_r, neck_q_r_c,
-                lw_pos_r, lw_q_r_c,
-                rw_pos_r, rw_q_r_c,
-                pelvis_pos_r, pelvis_q_r,
-            )
-
-            return VRCoordData(
-                headset_pos_robot=h_pos_r,
-                headset_quat_robot=h_q_r,
-                lw_pos_robot=lw_pos_r,
-                lw_quat_robot=lw_q_r_c,
-                rw_pos_robot=rw_pos_r,
-                rw_quat_robot=rw_q_r_c,
-                pelvis_pos_robot=pelvis_pos_r,
-                vr_3point_local_target=target,
-                vr_3point_local_orn_target=orn,
-                timestamp_ns=raw.timestamp_ns,
-            )
+            # body_poses 가 있으면 GearSonic 원본 파이프라인 사용
+            # (SMPL root 를 anchor 로 사용 — 컨트롤러 기반 pelvis 추정보다 정확)
+            if raw.body_poses is not None:
+                return self._from_body_poses(raw)
+            else:
+                return self._from_controllers(raw)
         except Exception:
             logger.exception("VRCoordProvider: 변환 오류")
             return None
+
+    def _from_body_poses(self, raw: VRPoseData) -> Optional["VRCoordData"]:
+        """SMPL body tracking (24관절) 기반 — GearSonic _process_3pt_pose 동일."""
+        target, orn = _smpl_to_3pt_local(raw.body_poses)
+
+        # 디버깅/로깅용 필드는 controller 로 채움
+        h_pos_r, h_q_r = _unity_to_robot(raw.headset_pose)
+        lw_pos_r, lw_q_r = _unity_to_robot(raw.left_controller_pose)
+        rw_pos_r, rw_q_r = _unity_to_robot(raw.right_controller_pose)
+
+        # SMPL root → robot frame 위치를 pelvis 로 사용
+        pelvis_pos_r = _Q @ raw.body_poses[0, :3]
+
+        return VRCoordData(
+            headset_pos_robot=h_pos_r,
+            headset_quat_robot=h_q_r,
+            lw_pos_robot=lw_pos_r,
+            lw_quat_robot=lw_q_r,
+            rw_pos_robot=rw_pos_r,
+            rw_quat_robot=rw_q_r,
+            pelvis_pos_robot=pelvis_pos_r,
+            vr_3point_local_target=target,
+            vr_3point_local_orn_target=orn,
+            timestamp_ns=raw.timestamp_ns,
+        )
+
+    def _from_controllers(self, raw: VRPoseData) -> Optional["VRCoordData"]:
+        """컨트롤러 포즈 기반 fallback (body tracking 없을 때)."""
+        # 1. Unity → Robot frame
+        h_pos_r, h_q_r = _unity_to_robot(raw.headset_pose)
+        lw_pos_r, lw_q_r = _unity_to_robot(raw.left_controller_pose)
+        rw_pos_r, rw_q_r = _unity_to_robot(raw.right_controller_pose)
+
+        # 2. 골반 위치 추정 (Unity Y 방향으로 offset 적용 후 변환)
+        pelvis_unity = raw.headset_pose[:3].copy()
+        pelvis_unity[1] -= self._headset_to_pelvis_y
+        pelvis_pos_r = _Q @ pelvis_unity
+
+        # 3. SMPL joint frame 정렬 오프셋 적용 (post-multiply = 내재 회전)
+        def _apply(q_wxyz, offset_rot):
+            return (sRot.from_quat(q_wxyz, scalar_first=True) * offset_rot).as_quat(scalar_first=True)
+
+        # anchor: yaw만 사용 — 헤드셋 pitch/roll이 섞이면 목/손목 local 위치가 틀어짐
+        pelvis_q_r  = _apply(_yaw_only(h_q_r), _OFFSET_ANCHOR)
+        lw_q_r_c    = _apply(lw_q_r, _OFFSET_LW)
+        rw_q_r_c    = _apply(rw_q_r, _OFFSET_RW)
+        neck_q_r_c  = _apply(h_q_r,  _OFFSET_NECK)
+
+        # 4. anchor-local 기준화
+        target, orn = _make_3point_local(
+            h_pos_r, neck_q_r_c,
+            lw_pos_r, lw_q_r_c,
+            rw_pos_r, rw_q_r_c,
+            pelvis_pos_r, pelvis_q_r,
+        )
+
+        return VRCoordData(
+            headset_pos_robot=h_pos_r,
+            headset_quat_robot=h_q_r,
+            lw_pos_robot=lw_pos_r,
+            lw_quat_robot=lw_q_r_c,
+            rw_pos_robot=rw_pos_r,
+            rw_quat_robot=rw_q_r_c,
+            pelvis_pos_robot=pelvis_pos_r,
+            vr_3point_local_target=target,
+            vr_3point_local_orn_target=orn,
+            timestamp_ns=raw.timestamp_ns,
+        )
 
     @property
     def connected(self) -> bool:

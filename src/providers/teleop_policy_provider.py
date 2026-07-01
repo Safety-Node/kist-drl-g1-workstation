@@ -10,11 +10,11 @@ inference 흐름:
     2. ONNX encoder                        → token (64,)
     3. decoder input 조립 (994,):
          [  0:  64]  token_state                           [64]
-         [ 64:  94]  his_base_angular_velocity_10f_s1      [30] = 10×3
-         [ 94: 384]  his_body_joint_positions_10f_s1       [290] = 10×29
-         [384: 674]  his_body_joint_velocities_10f_s1      [290]
-         [674: 964]  his_last_actions_10f_s1               [290] = 10×29
-         [964: 994]  his_gravity_dir_10f_s1                [30] = 10×3
+         [ 64:  94]  his_base_angular_velocity_10f_s1      [30] = 10×3  (oldest→newest)
+         [ 94: 384]  his_body_joint_positions_10f_s1       [290] = 10×29 (oldest→newest)
+         [384: 674]  his_body_joint_velocities_10f_s1      [290]         (oldest→newest)
+         [674: 964]  his_last_actions_10f_s1               [290] = 10×29 (oldest→newest)
+         [964: 994]  his_gravity_dir_10f_s1                [30] = 10×3  (oldest→newest)
     4. ONNX decoder                        → action_raw (29,) MuJoCo 순서
     5. q_target = DEFAULT_ANGLES + action_raw * ACTION_SCALE  (policy_params.py)
 
@@ -133,7 +133,8 @@ class TeleopPolicyProvider:
             vel_all_10f = np.zeros(290, dtype=np.float32)
             gravity_10f = np.tile([0.0, 0.0, -1.0], 10).astype(np.float32)
 
-        action_10f = np.concatenate(list(self._action_history)).astype(np.float32)  # (290,)
+        # reversed: deque[0]=newest → reversed gives [oldest, ..., newest] to match C++ newest_first=false
+        action_10f = np.concatenate(list(reversed(self._action_history))).astype(np.float32)  # (290,)
 
         decoder_input = np.concatenate([
             token,        # [  0:  64]

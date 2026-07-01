@@ -320,14 +320,16 @@ class G1ObsProvider:
         """
         deque[0]=최신 에서 step 간격으로 N_FRAMES_ALL(=10) 개를 샘플링해 flatten.
 
+        출력 순서: [oldest_frame, ..., newest_frame] — C++ GatherHis*(newest_first=false) 와 동일.
         버퍼가 충분하지 않으면 가장 오래된 프레임으로 padding.
         """
         buf_len = len(buf)
         frames = []
-        for i in range(N_FRAMES_ALL):
+        # i=9(oldest) → i=0(newest): oldest first ordering
+        for i in range(N_FRAMES_ALL - 1, -1, -1):
             idx = i * step
             if idx < buf_len:
                 frames.append(buf[idx])
             else:
-                frames.append(buf[buf_len - 1])
+                frames.append(buf[buf_len - 1])  # pad with oldest available
         return np.concatenate(frames).astype(np.float32)

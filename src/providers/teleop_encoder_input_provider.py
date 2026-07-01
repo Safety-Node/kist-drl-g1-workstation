@@ -5,7 +5,7 @@ VRCoordProvider + G1ObsProvider 의 출력을 조합해
 teleop encoder (ONNX) 에 넣을 입력 벡터(1762 dims)를 조립한다.
 
 encoder input 전체 레이아웃 (총 1762 dims):
-    [  0]  encoder_mode_4                               [4]  ← ACTIVE: [0,1,0,0]
+    [  0]  encoder_mode_4                               [4]  ← ACTIVE: [1,0,0,0] (mode_id=1 at pos 0)
     [  4]  motion_joint_positions_10frame_step5         [290] zeros
     [294]  motion_joint_velocities_10frame_step5        [290] zeros
     [584]  motion_root_z_position_10frame_step5         [10]  zeros
@@ -34,7 +34,7 @@ from .g1_obs_provider import G1ObsProvider, G1ObsData
 
 logger = logging.getLogger(__name__)
 
-_ENCODER_MODE_TELEOP = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+_ENCODER_MODE_TELEOP = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
 ENCODER_INPUT_DIM = 1762
 
