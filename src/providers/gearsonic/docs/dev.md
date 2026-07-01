@@ -46,7 +46,6 @@
 | `model_encoder.onnx` | `obs_dict [1, 1762] float32` | `encoded_tokens [1, 64] float32` |
 | `model_decoder.onnx` | `obs_dict [1, 994] float32` | `action [1, 29] float32` |
 
-Benchmark (CPU, onnxruntime): avg ~4ms, max ~9ms per encoder+decoder call.
 
 ## Planner Model
 
