@@ -35,8 +35,3 @@ See [docs/encoder_input_config.md](docs/encoder_input_config.md)
 | `obs_upperbody.py` | mode 1: VR 3-point + G1 lower body → 1762-dim |
 | `obs_wholebody.py` | mode 2: SMPL full body tracking → 1762-dim |
 
-## Reference
-
-- Encoder/Decoder ONNX: `src/policy/model_encoder.onnx`, `src/policy/model_decoder.onnx`
-- Observation config: `gear_sonic_deploy/policy/release/observation_config.yaml`
-- GearSonic source: `gear_sonic/scripts/pico_manager_thread_server.py`
