@@ -11,7 +11,7 @@ GearSonic wholebody control pipeline — converts VR input into encoder input (1
 | Package | Purpose |
 |---|---|
 | `numpy` | array operations |
-| `scipy` | rotation transforms (`Rotation`) |
+| `scipy` | rotation transforms |
 | `onnxruntime` | ONNX encoder / decoder inference |
 
 ## Encoder Modes
