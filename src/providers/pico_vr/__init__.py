@@ -1,1 +1,1 @@
-from .reader import PicoVRReaderProvider, PicoVRBodySample
+from .reader import PicoVRReader, PicoVRBodyPose

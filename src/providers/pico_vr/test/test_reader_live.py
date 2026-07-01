@@ -1,5 +1,5 @@
 """
-Live test for PicoVRReaderProvider.
+Live test for PicoVRReader.
 
 Requires:
   - RoboticsService running or auto-started via /opt/apps/roboticsservice/runService.sh
@@ -15,18 +15,18 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
-from src.providers.pico_vr.reader import PicoVRReaderProvider
+from src.providers.pico_vr.reader import PicoVRReader
 
 
 def main():
-    provider = PicoVRReaderProvider()
+    provider = PicoVRReader()
 
     try:
         provider.start()
         print("Waiting for PICO body tracking data... (Ctrl+C to stop)")
 
         while True:
-            sample = provider.data
+            sample = provider.body_pose
 
             if sample is None:
                 print(f"connected={provider.connected} | no data yet")

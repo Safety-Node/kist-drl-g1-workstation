@@ -1,23 +1,12 @@
 """
-PicoVRReaderProvider
+Usage:
+    reader = PicoVRReader()
+    reader.start()
 
-XRoboToolkit SDK(xrobotoolkit_sdk)를 통해 PICO VR 바디 트래킹 데이터를
-백그라운드 스레드로 폴링하고 최신 샘플을 스레드 안전하게 제공한다.
+    pose: PicoVRBodyPose | None = reader.body_pose
+    ctrl: PicoVRController | None = reader.controller
 
-참조: gear_sonic/scripts/pico_manager_thread_server.py — PicoReader 클래스
-
-읽는 데이터:
-    body_poses_np  ndarray (24, 7)   SMPL 24관절
-                                      [x, y, z, qx, qy, qz, qw]
-                                      Unity frame, scalar-last 쿼터니언
-
-프레임 감지:
-    xrt.get_time_stamp_ns() 변화 기준 (GearSonic 동일)
-    동일 timestamp = 새 데이터 없음 → skip
-
-연결 판정:
-    xrt.is_body_data_available() == True 이고 데이터가 들어오면 connected=True
-    _STALE_TIMEOUT_S 이상 새 데이터 없으면 connected=False
+    reader.stop()
 """
 
 import logging
@@ -25,24 +14,31 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import xrobotoolkit_sdk as xrt
-
-_ROBOTICS_SERVICE_SCRIPT = "/opt/apps/roboticsservice/runService.sh"
+import yaml
 
 from ..singleton import singleton
 
 logger = logging.getLogger(__name__)
 
-_STALE_TIMEOUT_S = 5.0
+_CONFIG_PATH = Path(__file__).parent / "reader_config.yaml"
+
+
+def _load_config() -> dict:
+    raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+    return {
+        "service_script":  raw["service"]["script"],
+        "polling_sleep_s": raw["polling"]["sleep_s"],
+        "stale_timeout_s": raw["connection"]["stale_timeout_s"],
+    }
 
 
 @dataclass
-class PicoVRBodySample:
-    """XRT SDK에서 한 틱에 읽은 SMPL 바디 포즈 스냅샷."""
-
+class PicoVRBodyPose:
     body_poses_np: np.ndarray    # (24, 7) [x,y,z,qx,qy,qz,qw] Unity frame, scalar-last
     timestamp_ns: int            # xrt.get_time_stamp_ns()
     timestamp_monotonic: float   # time.monotonic()
@@ -50,25 +46,35 @@ class PicoVRBodySample:
     fps: float                   # instantaneous FPS
 
 
+@dataclass
+class PicoVRController:
+    left_trigger: float
+    right_trigger: float
+    left_grip: float
+    right_grip: float
+    left_joystick: tuple
+    right_joystick: tuple
+    btn_a: bool
+    btn_b: bool
+    btn_x: bool
+    btn_y: bool
+    left_menu: bool
+    right_menu: bool
+
+
 @singleton
-class PicoVRReaderProvider:
+class PicoVRReader:
     """
-    PICO 바디 트래킹 싱글턴 Provider.
+    PICO body tracking and controller input reader.
 
-    사용법:
-        provider = PicoVRReaderProvider()
-        provider.start()
-
-        sample: PicoVRBodySample | None = provider.get_latest()
-
-        provider.stop()
     """
 
-    def __init__(self, stale_timeout_s: float = _STALE_TIMEOUT_S):
-        self._stale_timeout_s = stale_timeout_s
+    def __init__(self):
+        self._config = _load_config()
 
         self._lock = threading.Lock()
-        self._latest: Optional[PicoVRBodySample] = None
+        self._latest: Optional[PicoVRBodyPose] = None
+        self._latest_controller: Optional[PicoVRController] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -83,11 +89,11 @@ class PicoVRReaderProvider:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """백그라운드 폴링 스레드 시작. 중복 호출 시 no-op."""
+        """start background polling thread."""
         if self._thread is not None and self._thread.is_alive():
             return
 
-        subprocess.Popen(["bash", _ROBOTICS_SERVICE_SCRIPT])
+        subprocess.Popen(["bash", self._config["service_script"]])
         xrt.init()
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -96,15 +102,15 @@ class PicoVRReaderProvider:
             daemon=True,
         )
         self._thread.start()
-        logger.info("PicoVRReaderProvider started")
+        logger.info("PicoVRReader started")
 
     def stop(self) -> None:
-        """백그라운드 스레드 정지."""
+        """stop background thread."""
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
             if self._thread.is_alive():
-                logger.warning("PicoVRReaderProvider: thread did not stop within 2s")
+                logger.warning("PicoVRReader: thread did not stop within 2s")
         self._thread = None
         try:
             xrt.close()
@@ -112,16 +118,21 @@ class PicoVRReaderProvider:
             pass
         with self._lock:
             self._connected = False
-        logger.info("PicoVRReaderProvider stopped")
+        logger.info("PicoVRReader stopped")
 
     # ------------------------------------------------------------------
     # Data access
     # ------------------------------------------------------------------
 
     @property
-    def data(self) -> Optional[PicoVRBodySample]:
+    def body_pose(self) -> Optional[PicoVRBodyPose]:
         with self._lock:
             return self._latest
+
+    @property
+    def controller(self) -> Optional[PicoVRController]:
+        with self._lock:
+            return self._latest_controller
 
     @property
     def connected(self) -> bool:
@@ -129,22 +140,22 @@ class PicoVRReaderProvider:
             return self._connected
 
     # ------------------------------------------------------------------
-    # Background polling  (GearSonic PicoReader._run 동일 로직)
+    # Background polling
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            # 바디 트래킹 준비 대기
+            # waiting for body tracking
             if not xrt.is_body_data_available():
-                time.sleep(0.01)
+                time.sleep(self._config["polling_sleep_s"])
                 self._check_stale()
                 continue
 
-            # SDK timestamp 로 새 프레임 판별
+            # check new frame with SDK timestamp
             stamp_ns = int(xrt.get_time_stamp_ns())
             prev_stamp_ns = self._last_stamp_ns
             if prev_stamp_ns is not None and stamp_ns == prev_stamp_ns:
-                time.sleep(0.01)
+                time.sleep(self._config["polling_sleep_s"])
                 continue
 
             # dt / fps
@@ -158,29 +169,44 @@ class PicoVRReaderProvider:
             try:
                 body_poses_np = np.array(xrt.get_body_joints_pose(), dtype=np.float64)
 
-                sample = PicoVRBodySample(
+                body_pose = PicoVRBodyPose(
                     body_poses_np=body_poses_np,
                     timestamp_ns=stamp_ns,
                     timestamp_monotonic=now_mono,
                     dt=device_dt,
                     fps=self._fps,
                 )
+                controller = PicoVRController(
+                    left_trigger=float(xrt.get_left_trigger()),
+                    right_trigger=float(xrt.get_right_trigger()),
+                    left_grip=float(xrt.get_left_grip()),
+                    right_grip=float(xrt.get_right_grip()),
+                    left_joystick=tuple(xrt.get_left_axis()),
+                    right_joystick=tuple(xrt.get_right_axis()),
+                    btn_a=bool(xrt.get_A_button()),
+                    btn_b=bool(xrt.get_B_button()),
+                    btn_x=bool(xrt.get_X_button()),
+                    btn_y=bool(xrt.get_Y_button()),
+                    left_menu=bool(xrt.get_left_menu_button()),
+                    right_menu=bool(xrt.get_right_menu_button()),
+                )
                 with self._lock:
-                    self._latest = sample
+                    self._latest = body_pose
+                    self._latest_controller = controller
                     self._connected = True
                 self._last_new_data_mono = now_mono
 
             except Exception:
-                logger.exception("PicoVRReaderProvider: get_body_joints_pose error")
+                logger.exception("PicoVRReader: read error")
 
 
     def _check_stale(self) -> None:
         elapsed = time.monotonic() - self._last_new_data_mono
-        if elapsed > self._stale_timeout_s:
+        if elapsed > self._config["stale_timeout_s"]:
             with self._lock:
                 if self._connected:
                     logger.warning(
-                        "PicoVRReaderProvider: no new data for %.1fs — disconnected",
+                        "PicoVRReader: no new data for %.1fs — disconnected",
                         elapsed,
                     )
                 self._connected = False

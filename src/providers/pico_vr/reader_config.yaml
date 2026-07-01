@@ -1,0 +1,10 @@
+# PicoVRReader runtime configuration
+
+service:
+  script: "/opt/apps/roboticsservice/runService.sh"
+
+polling:
+  sleep_s: 0.002          # polling interval when no new frame (500Hz)
+
+connection:
+  stale_timeout_s: 5.0    # seconds without data before connected=False
