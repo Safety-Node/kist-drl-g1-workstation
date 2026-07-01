@@ -2,8 +2,6 @@
 
 ## Encoder Modes
 
-Reference: `gear_sonic_deploy/policy/release/observation_config.yaml`
-
 | mode_id | name | one-hot | description |
 |---|---|---|---|
 | 0 | `g1` | `[1,0,0,0]` | motion capture imitation — follows pre-recorded reference motion clips |
