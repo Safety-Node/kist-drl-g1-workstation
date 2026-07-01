@@ -4,6 +4,7 @@ Usage:
     reader.start()
 
     pose: PicoVRBodyPose | None = reader.body_pose
+    vr:   PicoVRPose | None     = reader.pose
     ctrl: PicoVRController | None = reader.controller
 
     reader.stop()
@@ -47,6 +48,15 @@ class PicoVRBodyPose:
 
 
 @dataclass
+class PicoVRPose:
+    headset: np.ndarray           # (7,) [x,y,z,qx,qy,qz,qw] Unity frame, scalar-last
+    left_controller: np.ndarray   # (7,)
+    right_controller: np.ndarray  # (7,)
+    timestamp_ns: int
+    timestamp_monotonic: float
+
+
+@dataclass
 class PicoVRController:
     left_trigger: float
     right_trigger: float
@@ -58,8 +68,6 @@ class PicoVRController:
     btn_b: bool
     btn_x: bool
     btn_y: bool
-    left_menu: bool
-    right_menu: bool
 
 
 @singleton
@@ -74,6 +82,7 @@ class PicoVRReader:
 
         self._lock = threading.Lock()
         self._latest: Optional[PicoVRBodyPose] = None
+        self._latest_pose: Optional[PicoVRPose] = None
         self._latest_controller: Optional[PicoVRController] = None
 
         self._stop_event = threading.Event()
@@ -130,6 +139,11 @@ class PicoVRReader:
             return self._latest
 
     @property
+    def pose(self) -> Optional[PicoVRPose]:
+        with self._lock:
+            return self._latest_pose
+
+    @property
     def controller(self) -> Optional[PicoVRController]:
         with self._lock:
             return self._latest_controller
@@ -156,6 +170,7 @@ class PicoVRReader:
             prev_stamp_ns = self._last_stamp_ns
             if prev_stamp_ns is not None and stamp_ns == prev_stamp_ns:
                 time.sleep(self._config["polling_sleep_s"])
+                self._check_stale()
                 continue
 
             # dt / fps
@@ -167,14 +182,19 @@ class PicoVRReader:
             now_mono = time.monotonic()
 
             try:
-                body_poses_np = np.array(xrt.get_body_joints_pose(), dtype=np.float64)
-
                 body_pose = PicoVRBodyPose(
-                    body_poses_np=body_poses_np,
+                    body_poses_np=np.array(xrt.get_body_joints_pose(), dtype=np.float64),
                     timestamp_ns=stamp_ns,
                     timestamp_monotonic=now_mono,
                     dt=device_dt,
                     fps=self._fps,
+                )
+                pose = PicoVRPose(
+                    headset=np.array(xrt.get_headset_pose(), dtype=np.float64),
+                    left_controller=np.array(xrt.get_left_controller_pose(), dtype=np.float64),
+                    right_controller=np.array(xrt.get_right_controller_pose(), dtype=np.float64),
+                    timestamp_ns=stamp_ns,
+                    timestamp_monotonic=now_mono,
                 )
                 controller = PicoVRController(
                     left_trigger=float(xrt.get_left_trigger()),
@@ -187,18 +207,16 @@ class PicoVRReader:
                     btn_b=bool(xrt.get_B_button()),
                     btn_x=bool(xrt.get_X_button()),
                     btn_y=bool(xrt.get_Y_button()),
-                    left_menu=bool(xrt.get_left_menu_button()),
-                    right_menu=bool(xrt.get_right_menu_button()),
                 )
                 with self._lock:
                     self._latest = body_pose
+                    self._latest_pose = pose
                     self._latest_controller = controller
                     self._connected = True
                 self._last_new_data_mono = now_mono
 
             except Exception:
                 logger.exception("PicoVRReader: read error")
-
 
     def _check_stale(self) -> None:
         elapsed = time.monotonic() - self._last_new_data_mono
@@ -210,3 +228,6 @@ class PicoVRReader:
                         elapsed,
                     )
                 self._connected = False
+                self._latest = None
+                self._latest_pose = None
+                self._latest_controller = None
