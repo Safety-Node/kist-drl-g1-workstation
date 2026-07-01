@@ -1,15 +1,3 @@
-"""
-Usage:
-    reader = PicoVRReader()
-    reader.start()
-
-    pose: PicoVRBodyPose | None = reader.body_pose
-    vr:   PicoVRPose | None     = reader.pose
-    ctrl: PicoVRController | None = reader.controller
-
-    reader.stop()
-"""
-
 import logging
 import subprocess
 import threading

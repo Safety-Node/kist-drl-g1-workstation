@@ -49,6 +49,32 @@ pip install pybind11
 python setup.py install --user
 ```
 
+## Environment
+
+Source `env.sh` before running to set `LD_LIBRARY_PATH`:
+
+```bash
+source src/providers/pico_vr/env.sh
+```
+
 ## VR Setup
 
 See [docs/pico_vr_setup.md](docs/pico_vr_setup.md).
+
+## Usage
+
+```python
+from src.providers.pico_vr import PicoVRReader
+
+reader = PicoVRReader()
+reader.start()
+
+body = reader.body_pose   # PicoVRBodyPose | None  — (24, 7) SMPL joints
+vr   = reader.pose        # PicoVRPose | None      — headset + L/R controller poses
+ctrl = reader.controller  # PicoVRController | None — buttons, triggers, joysticks
+
+reader.stop()
+```
+
+All properties return `None` until the headset connects and body tracking is enabled.
+Stale data is cleared to `None` after `stale_timeout_s` (default 5s) of no new frames.
