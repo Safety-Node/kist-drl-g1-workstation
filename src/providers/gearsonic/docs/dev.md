@@ -7,6 +7,7 @@
 | 0 | `g1` | `[1,0,0,0]` | motion capture imitation — follows pre-recorded reference motion clips |
 | 1 | `upperbody` | `[0,1,0,0]` | VR upper body teleop — VR 3-point (wrists + neck) controls arms, G1 lower body sensors as context |
 | 2 | `wholebody` | `[0,0,1,0]` | VR full body teleop — SMPL 24-joint tracking drives the full 29-DOF output |
+| 3 | — | `[0,0,0,1]` | reserved / unused |
 
 ## Encoder Input Layout (1762-dim)
 
