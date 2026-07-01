@@ -24,7 +24,7 @@ GearSonic wholebody control pipeline — converts VR input into encoder input (1
 
 ## Encoder Input Layout
 
-See [docs/encoder_input_config.md](docs/encoder_input_config.md)
+See [docs/dev.md](docs/dev.md)
 
 ## Files
 
