@@ -4,7 +4,7 @@ Module for reading body tracking data from the PICO VR headset.
 
 ## Architecture
 
-<!-- architecture diagram -->
+![architecture](docs/architecture.png)
 
 Reference: `gear_sonic/scripts/pico_manager_thread_server.py` — `PicoReader` class
 
