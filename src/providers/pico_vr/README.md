@@ -16,8 +16,6 @@ Reference: `gear_sonic/scripts/pico_manager_thread_server.py` — `PicoReader` c
 
 ### Installing xrobotoolkit_sdk
 
-Do **not** run `setup_ubuntu.sh` directly — it has bugs. Use the steps below instead.
-
 ```bash
 git clone https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git
 cd XRoboToolkit-PC-Service-Pybind
