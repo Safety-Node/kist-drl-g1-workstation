@@ -8,13 +8,11 @@ GearSonic wholebody control pipeline — converts VR input into encoder input (1
 
 ## Dependencies
 
-| Dependency | Purpose |
+| Package | Purpose |
 |---|---|
 | `numpy` | array operations |
 | `scipy` | rotation transforms (`Rotation`) |
 | `onnxruntime` | ONNX encoder / decoder inference |
-| `PicoVRReader` | SMPL body pose from PICO VR headset |
-| `G1ObsProvider` | G1 lower body joint state + IMU |
 
 ## Encoder Modes
 
