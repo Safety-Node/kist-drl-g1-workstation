@@ -74,15 +74,3 @@
 |---|---|---|
 | `mujoco_qpos` | `[1, 64, 36]` | future trajectory (64 frames × 36 joints) |
 | `num_pred_frames` | `[1]` | number of predicted frames |
-
-## VR 3-Point Pose
-
-Extracted from SMPL 24-joint body pose. Source: `three_point_pose.py`
-
-| index | keypoint | SMPL joint | note |
-|---|---|---|---|
-| 0 | L-Wrist | 22 | |
-| 1 | R-Wrist | 23 | |
-| 2 | Neck | 12 | more stable than Head (joint 15) |
-
-Output shape: `(3, 7)` — each row `[x, y, z, qw, qx, qy, qz]` relative to root, robot frame, scalar-first quaternion.
