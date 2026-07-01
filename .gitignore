@@ -30,6 +30,10 @@ junit.xml
 CLAUDE.md
 .claude/
 
+# pico_vr external dependencies
+src/providers/pico_vr/XRoboToolkit-PC-Service-Pybind/
+src/providers/pico_vr/*.deb
+
 # Debug files
 front_image.jpg
 turtlebot4_debug.jpg

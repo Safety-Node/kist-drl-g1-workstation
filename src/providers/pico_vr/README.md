@@ -48,3 +48,7 @@ pip install pybind11
 # 3. Build and install xrobotoolkit_sdk
 python setup.py install --user
 ```
+
+## VR Setup
+
+See [docs/pico_vr_setup.md](docs/pico_vr_setup.md).

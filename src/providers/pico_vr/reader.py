@@ -37,18 +37,17 @@ from ..singleton import singleton
 logger = logging.getLogger(__name__)
 
 _STALE_TIMEOUT_S = 5.0
-_LOG_INTERVAL_S  = 5.0
 
 
 @dataclass
-class VRBodySample:
+class PicoVRBodySample:
     """XRT SDK에서 한 틱에 읽은 SMPL 바디 포즈 스냅샷."""
 
     body_poses_np: np.ndarray    # (24, 7) [x,y,z,qx,qy,qz,qw] Unity frame, scalar-last
     timestamp_ns: int            # xrt.get_time_stamp_ns()
     timestamp_monotonic: float   # time.monotonic()
     dt: float                    # 직전 프레임 대비 경과 시간 (s)
-    fps: float                   # EMA 추정 FPS
+    fps: float                   # instantaneous FPS
 
 
 @singleton
@@ -60,7 +59,7 @@ class PicoVRReaderProvider:
         provider = PicoVRReaderProvider()
         provider.start()
 
-        sample: VRBodySample | None = provider.get_latest()
+        sample: PicoVRBodySample | None = provider.get_latest()
 
         provider.stop()
     """
@@ -69,12 +68,12 @@ class PicoVRReaderProvider:
         self._stale_timeout_s = stale_timeout_s
 
         self._lock = threading.Lock()
-        self._latest: Optional[VRBodySample] = None
+        self._latest: Optional[PicoVRBodySample] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-        self._fps_ema: float = 0.0
+        self._fps: float = 0.0
         self._last_stamp_ns: Optional[int] = None
         self._last_new_data_mono: float = time.monotonic()
         self._connected = False
@@ -120,7 +119,7 @@ class PicoVRReaderProvider:
     # ------------------------------------------------------------------
 
     @property
-    def data(self) -> Optional[VRBodySample]:
+    def data(self) -> Optional[PicoVRBodySample]:
         with self._lock:
             return self._latest
 
@@ -134,12 +133,10 @@ class PicoVRReaderProvider:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
-        last_log = time.time()
-
         while not self._stop_event.is_set():
             # 바디 트래킹 준비 대기
             if not xrt.is_body_data_available():
-                time.sleep(0.001)
+                time.sleep(0.01)
                 self._check_stale()
                 continue
 
@@ -147,14 +144,13 @@ class PicoVRReaderProvider:
             stamp_ns = int(xrt.get_time_stamp_ns())
             prev_stamp_ns = self._last_stamp_ns
             if prev_stamp_ns is not None and stamp_ns == prev_stamp_ns:
-                time.sleep(0.000001)
+                time.sleep(0.01)
                 continue
 
             # dt / fps
             device_dt = ((stamp_ns - prev_stamp_ns) * 1e-9) if prev_stamp_ns is not None else 0.0
             if device_dt > 0.0:
-                inst = 1.0 / device_dt
-                self._fps_ema = inst if self._fps_ema == 0.0 else (0.9 * self._fps_ema + 0.1 * inst)
+                self._fps = 1.0 / device_dt
             self._last_stamp_ns = stamp_ns
 
             now_mono = time.monotonic()
@@ -162,12 +158,12 @@ class PicoVRReaderProvider:
             try:
                 body_poses_np = np.array(xrt.get_body_joints_pose(), dtype=np.float64)
 
-                sample = VRBodySample(
+                sample = PicoVRBodySample(
                     body_poses_np=body_poses_np,
                     timestamp_ns=stamp_ns,
                     timestamp_monotonic=now_mono,
                     dt=device_dt,
-                    fps=self._fps_ema,
+                    fps=self._fps,
                 )
                 with self._lock:
                     self._latest = sample
@@ -177,14 +173,6 @@ class PicoVRReaderProvider:
             except Exception:
                 logger.exception("PicoVRReaderProvider: get_body_joints_pose error")
 
-            now = time.time()
-            if now - last_log >= _LOG_INTERVAL_S:
-                logger.info(
-                    "PicoVRReaderProvider: dt=%.2f ms | fps=%.1f",
-                    device_dt * 1000.0,
-                    self._fps_ema,
-                )
-                last_log = now
 
     def _check_stale(self) -> None:
         elapsed = time.monotonic() - self._last_new_data_mono
