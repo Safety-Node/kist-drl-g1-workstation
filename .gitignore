@@ -46,6 +46,7 @@ launch.sh
 
 # AI models
 *.pt
+*.onnx
 
 # Logs
 logs/
