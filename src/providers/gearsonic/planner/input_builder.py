@@ -19,7 +19,7 @@ from scipy.spatial.transform import Rotation as sRot, Slerp
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path(__file__).parent / "planner_input_config.yaml"
+_CONFIG_PATH = Path(__file__).parent.parent / "planner_input_config.yaml"
 
 
 def _load_config() -> dict:
