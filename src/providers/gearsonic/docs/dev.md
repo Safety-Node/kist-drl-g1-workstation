@@ -8,19 +8,19 @@
 
 **Input:**
 
-| range | field | size | description |
+| range | field | shape | description |
 |---|---|---|---|
-| `[1]` | `context_mujoco_qpos` | 144 | robot state history — 4 frames × 36 (7 floating base + 29 joints in isaaclab order), float32 |
-| `[2]` | `target_vel` | 1 | target speed m/s (−1 = default), float32 |
-| `[3]` | `mode` | 1 | locomotion mode (int64): 0=IDLE, 1=SLOW_WALK, 2=WALK, 3=RUN, 4=IDLE_SQUAT, … |
-| `[4]` | `movement_direction` | 3 | direction to move (unit vector), float32 |
-| `[5]` | `facing_direction` | 3 | direction to face (unit vector), float32 |
-| `[6]` | `random_seed` | 1 | random seed for stochastic generation, int64 |
-| `[7]` | `has_specific_target` | 1 | specific waypoint target (int64): 0=no, 1=yes |
-| `[8]` | `specific_target_positions` | 12 | 4 waypoint positions xyz, float32 |
-| `[9]` | `specific_target_headings` | 4 | 4 waypoint heading angles, float32 |
-| `[10]` | `allowed_pred_num_tokens` | 11 | prediction token mask, int64 (default: [1,1,1,1,1,1,0,0,0,0,0]) |
-| `[11]` | `height` | 1 | target body height in meters (−1 = use model default), float32 |
+| `[1]` | `context_mujoco_qpos` | `[1, 4, 36]` | robot state history — 4 frames × 36 (7 floating base + 29 joints in isaaclab order), float32 |
+| `[2]` | `target_vel` | `[1]` | target speed m/s (−1 = default), float32 |
+| `[3]` | `mode` | `[1]` | locomotion mode (int64): 0=IDLE, 1=SLOW_WALK, 2=WALK, 3=RUN, 4=IDLE_SQUAT, … |
+| `[4]` | `movement_direction` | `[1, 3]` | direction to move (unit vector), float32 |
+| `[5]` | `facing_direction` | `[1, 3]` | direction to face (unit vector), float32 |
+| `[6]` | `random_seed` | `[1]` | random seed for stochastic generation, int64 |
+| `[7]` | `has_specific_target` | `[1, 1]` | specific waypoint target (int64): 0=no, 1=yes |
+| `[8]` | `specific_target_positions` | `[1, 4, 3]` | 4 waypoint positions xyz, float32 |
+| `[9]` | `specific_target_headings` | `[1, 4]` | 4 waypoint heading angles, float32 |
+| `[10]` | `allowed_pred_num_tokens` | `[1, 11]` | prediction token mask, int64 (default: [1,1,1,1,1,1,0,0,0,0,0]) |
+| `[11]` | `height` | `[1]` | target body height in meters (−1 = use model default), float32 |
 
 **Output:**
 
