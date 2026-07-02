@@ -11,12 +11,24 @@ Planner ONNX output mujoco_qpos has joints in isaaclab order at [7:36].
 """
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import yaml
 from scipy.spatial.transform import Rotation as sRot, Slerp
 
 logger = logging.getLogger(__name__)
+
+_CONFIG_PATH = Path(__file__).parent / "planner_input_config.yaml"
+
+
+def _load_config() -> dict:
+    raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+    return {
+        "default_height":          raw["planner"]["default_height"],
+        "allowed_pred_num_tokens": raw["planner"]["allowed_pred_num_tokens"],
+    }
 
 
 class PlannerInputBuilder:
@@ -43,19 +55,15 @@ class PlannerInputBuilder:
         "right_wrist_yaw",
     ]
 
-    # allowed_pred_num_tokens default: [1,1,1,1,1,1,0,0,0,0,0]
-    _ALLOWED_TOKENS = [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
-
-    DEFAULT_HEIGHT = 0.787  # G1 standing height (m)
-
-    def __init__(self, g1_provider, default_height: float = DEFAULT_HEIGHT):
+    def __init__(self, g1_provider):
         """
         Args:
-            g1_provider:    UnitreeG1Provider instance (must be started).
-            default_height: root z used when initializing context (default G1 standing height).
+            g1_provider: UnitreeG1Provider instance (must be started).
         """
+        cfg = _load_config()
         self._g1 = g1_provider
-        self._default_height = default_height
+        self._default_height: float = cfg["default_height"]
+        self._allowed_tokens: list  = cfg["allowed_pred_num_tokens"]
         self._context = np.zeros((4, 36), dtype=np.float32)
         self._joint_name_to_idx: Optional[dict] = None
 
@@ -183,7 +191,7 @@ class PlannerInputBuilder:
             "has_specific_target":       np.zeros((1, 1), dtype=np.int64),
             "specific_target_positions": np.zeros((1, 4, 3), dtype=np.float32),
             "specific_target_headings":  np.zeros((1, 4), dtype=np.float32),
-            "allowed_pred_num_tokens":   np.array([self._ALLOWED_TOKENS], dtype=np.int64),
+            "allowed_pred_num_tokens":   np.array([self._allowed_tokens], dtype=np.int64),
             "height":                    np.array([-1.0], dtype=np.float32),
         }
 
