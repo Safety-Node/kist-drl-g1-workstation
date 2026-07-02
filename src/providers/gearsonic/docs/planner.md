@@ -2,7 +2,7 @@
 
 ## Architecture
 
-<!-- TODO: insert architecture diagram -->
+![Planner Architecture](planner_architecture.png)
 
 ## Model
 
