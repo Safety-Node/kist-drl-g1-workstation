@@ -42,17 +42,39 @@ class PlannerInputBuilder:
     def __init__(self):
         self._config = _load_config()
         self._context = np.zeros((4, 36), dtype=np.float32)
-
-        # operator-controlled inputs — set externally before build()
-        self.target_vel: float = 0.0
-        self.mode: int = 0
-        self.movement_direction = np.zeros(3, dtype=np.float32)
-        self.facing_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        self.random_seed: int = 0
+        self._target_vel: float = 0.0
+        self._mode: int = 0
+        self._movement_direction = np.zeros(3, dtype=np.float32)
+        self._facing_direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        self._random_seed: int = 0
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def update_command(
+        self,
+        mode: int,
+        target_vel: float,
+        movement_direction: np.ndarray,
+        facing_direction: np.ndarray,
+        random_seed: int,
+    ) -> None:
+        """
+        Update operator-controlled planner inputs.
+
+        Input:
+            mode                int       — locomotion mode (0=IDLE, 1=SLOW_WALK, ...)
+            target_vel          float     — target speed m/s (−1 = model default)
+            movement_direction  (3,) f32  — direction to move (unit vector)
+            facing_direction    (3,) f32  — direction to face (unit vector)
+            random_seed         int       — random seed for stochastic generation
+        """
+        self._mode = mode
+        self._target_vel = target_vel
+        self._movement_direction = np.asarray(movement_direction, dtype=np.float32)
+        self._facing_direction = np.asarray(facing_direction, dtype=np.float32)
+        self._random_seed = random_seed
 
     def initialize(self, joint_pos_mujoco: np.ndarray) -> None:
         """
@@ -152,11 +174,11 @@ class PlannerInputBuilder:
         """
         return {
             "context_mujoco_qpos":       self._context[np.newaxis].copy(),
-            "target_vel":                np.array([self.target_vel], dtype=np.float32),
-            "mode":                      np.array([self.mode], dtype=np.int64),
-            "movement_direction":        self.movement_direction[np.newaxis].copy(),
-            "facing_direction":          self.facing_direction[np.newaxis].copy(),
-            "random_seed":               np.array([self.random_seed], dtype=np.int64),
+            "target_vel":                np.array([self._target_vel], dtype=np.float32),
+            "mode":                      np.array([self._mode], dtype=np.int64),
+            "movement_direction":        self._movement_direction[np.newaxis].copy(),
+            "facing_direction":          self._facing_direction[np.newaxis].copy(),
+            "random_seed":               np.array([self._random_seed], dtype=np.int64),
             "has_specific_target":       np.zeros((1, 1), dtype=np.int64),
             "specific_target_positions": np.zeros((1, 4, 3), dtype=np.float32),
             "specific_target_headings":  np.zeros((1, 4), dtype=np.float32),
