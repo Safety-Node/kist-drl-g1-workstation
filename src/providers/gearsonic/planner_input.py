@@ -7,7 +7,7 @@ context_mujoco_qpos layout (per frame, 36 values):
     [7:36]  joint positions   — 29 joints in isaaclab order
 
 Joints in context are stored in isaaclab order (matches C++ UpdateContextFromMotion).
-Planner ONNX output mujoco_qpos has joints in mujoco order at [7:36].
+Planner ONNX output mujoco_qpos has joints in isaaclab order at [7:36].
 """
 
 import logging
@@ -108,30 +108,30 @@ class PlannerInputBuilder:
         Matches C++ UpdateContextFromMotion.
 
         Input:
-            trajectory  [N, 36] float32 — planner mujoco_qpos output (N ≤ 64)
-                        [0:3] pos, [3:7] quat wxyz, [7:36] joints in mujoco order
-            gen_frame   current playback frame index into trajectory (50Hz)
+            trajectory  [N, 36] float32 — planner mujoco_qpos output (N ≤ 64, 30Hz)
+                        [0:3] pos, [3:7] quat wxyz, [7:36] joints in isaaclab order
+            gen_frame   current playback frame index (50Hz counter)
 
         Process:
             For each of 4 context frames n=0..3:
                 t = gen_frame/50 + n/30          (sample time in seconds)
-                f_50hz = t * 50                  (fractional frame index)
-                f0, f1  = floor/ceil of f_50hz   (clamped to trajectory length)
-                w0 = 1 - (f_50hz - f0)
+                f_30hz = t * 30                  (fractional 30Hz frame index)
+                f0, f1  = floor/ceil of f_30hz   (clamped to trajectory length)
+                w0 = 1 - (f_30hz - f0)
 
-                pos  = lerp(traj[f0, 0:3], traj[f1, 0:3], w1)
-                quat = slerp(traj[f0, 3:7], traj[f1, 3:7], frac)
-                joints[isaac_i] = lerp(traj[f0, 7+mujoco_i], traj[f1, 7+mujoco_i], w1)
+                pos    = lerp(traj[f0, 0:3], traj[f1, 0:3], w1)
+                quat   = slerp(traj[f0, 3:7], traj[f1, 3:7], frac)
+                joints = lerp(traj[f0, 7:], traj[f1, 7:], w1)  — isaaclab order, direct copy
         """
         T = len(trajectory)
         gen_time = gen_frame / 50.0
 
         for n in range(4):
             t = gen_time + n / 30.0
-            f_50hz = t * 50.0
-            f0 = min(int(np.floor(f_50hz)), T - 1)
+            f_30hz = t * 30.0
+            f0 = min(int(np.floor(f_30hz)), T - 1)
             f1 = min(f0 + 1, T - 1)
-            w0 = float(1.0 - (f_50hz - f0))
+            w0 = float(1.0 - (f_30hz - f0))
             w1 = float(1.0 - w0)
 
             # position
@@ -139,15 +139,11 @@ class PlannerInputBuilder:
 
             # quaternion slerp [qw, qx, qy, qz]
             self._context[n, 3:7] = _quat_slerp(
-                trajectory[f0, 3:7], trajectory[f1, 3:7], f_50hz - f0
+                trajectory[f0, 3:7], trajectory[f1, 3:7], f_30hz - f0
             )
 
-            # joints: planner output is mujoco order → store in isaaclab order
-            for mujoco_i, isaac_i in enumerate(self._MUJOCO_TO_ISAACLAB):
-                self._context[n, 7 + isaac_i] = (
-                    w0 * trajectory[f0, 7 + mujoco_i] +
-                    w1 * trajectory[f1, 7 + mujoco_i]
-                )
+            # joints: planner output is isaaclab order → direct copy
+            self._context[n, 7:] = w0 * trajectory[f0, 7:] + w1 * trajectory[f1, 7:]
 
     def build(self) -> dict:
         """
