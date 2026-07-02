@@ -47,7 +47,99 @@ class ObsBuilderBase:
         return ObsBuilderBase._unity_to_robot(smpl[ObsBuilderBase._SMPL_ROOT, 3:])
 
     # ------------------------------------------------------------------
-    # 3-point pose extraction
+    # Heading (calibration helper)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _calc_heading_quat(rot: sRot) -> sRot:
+        """Yaw-only rotation (matches C++ calc_heading_quat_d)."""
+        fwd = rot.apply([1.0, 0.0, 0.0])
+        return sRot.from_euler("z", np.arctan2(fwd[1], fwd[0]))
+
+    @staticmethod
+    def _compute_delta_heading(smpl: np.ndarray, base_quat_wxyz: np.ndarray) -> sRot:
+        """
+        apply_delta_heading = yaw(init_base) * inv(yaw(init_smpl_root)).
+        Matches C++ ComputeApplyDeltaHeading — call once at calibration time.
+        """
+        robot_base = sRot.from_quat(base_quat_wxyz, scalar_first=True)
+        init_heading = ObsBuilderBase._calc_heading_quat(robot_base)
+        smpl_root = ObsBuilderBase._smpl_root_to_robot(smpl)
+        data_heading_inv = ObsBuilderBase._calc_heading_quat(smpl_root).inv()
+        return init_heading * data_heading_inv
+
+    # ------------------------------------------------------------------
+    # obs[595:601]  motion_anchor_orientation  (upperbody mode)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _quat_to_6d(rot: sRot) -> np.ndarray:
+        """First 2 columns of rotation matrix, row-wise → (6,) float32."""
+        m = rot.as_matrix()
+        return np.array([m[0,0], m[0,1], m[1,0], m[1,1], m[2,0], m[2,1]], dtype=np.float32)
+
+    @staticmethod
+    def _anchor_6d(
+        smpl: np.ndarray,
+        base_quat_wxyz: np.ndarray,
+        apply_delta_heading: sRot,
+    ) -> np.ndarray:
+        """
+        Single-frame anchor orientation in 6D rotation representation.
+        Matches C++ GatherMotionAnchorOrientationMutiFrame (num_frames=1, orientation_mode=0).
+
+        Input:
+            smpl               (24, 7) float32 — SMPL joints in Unity frame (pos 3 + quat 4)
+            base_quat_wxyz     (4,)    float64 — robot base IMU quaternion [w, x, y, z]
+            apply_delta_heading sRot           — heading alignment:
+                                                 yaw(init_base) * inv(yaw(init_smpl_root))
+
+        Process:
+            smpl_root = Unity→Robot frame transform of smpl joint 0 quaternion
+
+            aligned   = apply_delta_heading * smpl_root
+                      = heading-aligned SMPL root orientation
+
+            base      = robot base IMU orientation
+
+            rel       = inv(base) * aligned
+                      = SMPL root orientation expressed relative to current robot base orientation
+
+            R         = rotation_matrix(rel)
+
+            output    = R[:, :2].reshape(-1)
+                      = first 2 columns of rotation matrix, row-wise flatten
+
+        Output:
+            (6,) float32 — [R00, R01, R10, R11, R20, R21]
+        """
+        smpl_root = ObsBuilderBase._smpl_root_to_robot(smpl)
+        aligned = apply_delta_heading * smpl_root
+        base = sRot.from_quat(base_quat_wxyz, scalar_first=True)
+        return ObsBuilderBase._quat_to_6d(base.inv() * aligned)
+
+    # ------------------------------------------------------------------
+    # obs[661:781]  motion_joint_positions_lowerbody_10frame_step5  (upperbody mode)
+    # obs[781:901]  motion_joint_velocities_lowerbody_10frame_step5 (upperbody mode)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sample_history(buf, n_frames: int, step: int) -> np.ndarray:
+        """
+        Sample n_frames at given step from newest-first deque.
+        Output order: [oldest, ..., newest] (newest_first=false).
+        Pads with oldest available frame when buffer is short.
+        """
+        buf_len = len(buf)
+        frames = []
+        for i in range(n_frames - 1, -1, -1):
+            idx = i * step
+            frames.append(buf[min(idx, buf_len - 1)])
+        return np.concatenate(frames).astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # obs[901:910]  vr_3point_local_target      (upperbody mode)
+    # obs[910:922]  vr_3point_local_orn_target  (upperbody mode)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -78,68 +170,3 @@ class ObsBuilderBase:
             ).as_quat(scalar_first=True)
 
         return kp[1:].astype(np.float32)  # (3, 7) scalar-first
-
-    # ------------------------------------------------------------------
-    # Anchor orientation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _calc_heading_quat(rot: sRot) -> sRot:
-        """Yaw-only rotation (matches C++ calc_heading_quat_d)."""
-        fwd = rot.apply([1.0, 0.0, 0.0])
-        return sRot.from_euler("z", np.arctan2(fwd[1], fwd[0]))
-
-    @staticmethod
-    def _compute_delta_heading(smpl: np.ndarray, base_quat_wxyz: np.ndarray) -> sRot:
-        """
-        apply_delta_heading = yaw(init_base) * inv(yaw(init_smpl_root)).
-        Matches C++ ComputeApplyDeltaHeading — call once at calibration time.
-        """
-        robot_base = sRot.from_quat(base_quat_wxyz, scalar_first=True)
-        init_heading = ObsBuilderBase._calc_heading_quat(robot_base)
-        smpl_root = ObsBuilderBase._smpl_root_to_robot(smpl)
-        data_heading_inv = ObsBuilderBase._calc_heading_quat(smpl_root).inv()
-        return init_heading * data_heading_inv
-
-    @staticmethod
-    def _anchor_6d(
-        smpl: np.ndarray,
-        base_quat_wxyz: np.ndarray,
-        apply_delta_heading: sRot,
-    ) -> np.ndarray:
-        """
-        Single-frame anchor orientation: 6D(inv(base) * apply_delta_heading * smpl_root).
-        Matches C++ GatherMotionAnchorOrientationMutiFrame (num_frames=1).
-        """
-        smpl_root = ObsBuilderBase._smpl_root_to_robot(smpl)
-        aligned = apply_delta_heading * smpl_root
-        base = sRot.from_quat(base_quat_wxyz, scalar_first=True)
-        return ObsBuilderBase._quat_to_6d(base.inv() * aligned)
-
-    # ------------------------------------------------------------------
-    # Rotation → 6D
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _quat_to_6d(rot: sRot) -> np.ndarray:
-        """First 2 columns of rotation matrix, row-wise → (6,) float32."""
-        m = rot.as_matrix()
-        return np.array([m[0,0], m[0,1], m[1,0], m[1,1], m[2,0], m[2,1]], dtype=np.float32)
-
-    # ------------------------------------------------------------------
-    # History sampling
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _sample_history(buf, n_frames: int, step: int) -> np.ndarray:
-        """
-        Sample n_frames at given step from newest-first deque.
-        Output order: [oldest, ..., newest] (newest_first=false).
-        Pads with oldest available frame when buffer is short.
-        """
-        buf_len = len(buf)
-        frames = []
-        for i in range(n_frames - 1, -1, -1):
-            idx = i * step
-            frames.append(buf[min(idx, buf_len - 1)])
-        return np.concatenate(frames).astype(np.float32)
