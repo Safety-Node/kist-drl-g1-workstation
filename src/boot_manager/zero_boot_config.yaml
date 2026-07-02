@@ -3,4 +3,3 @@
 
 zero_boot:
   - PicoVRReader
-  - PlannerOnnxRuntime
