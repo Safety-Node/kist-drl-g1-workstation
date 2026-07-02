@@ -31,35 +31,28 @@
 
 ## Planner Locomotion Modes
 
-| mode | name | version |
-|---|---|---|
-| 0 | `IDLE` | v0+ |
-| 1 | `SLOW_WALK` | v0+ |
-| 2 | `WALK` | v0+ |
-| 3 | `RUN` | v0+ |
-| 4 | `IDLE_SQUAT` | v1+ |
-| 5 | `IDLE_KNEEL_TWO_LEGS` | v1+ |
-| 6 | `IDLE_KNEEL` | v1+ |
-| 7 | `IDLE_LYING` | v1+ |
-| 8 | `IDLE_CRAWLING` | v1+ |
-| 9 | `IDLE_BOXING` | v1+ |
-| 10 | `WALK_BOXING` | v1+ |
-| 11 | `LEFT_PUNCH` | v1+ |
-| 12 | `RIGHT_PUNCH` | v1+ |
-| 13 | `RANDOM_PUNCH` | v1+ |
-| 14 | `ELBOW_CRAWLING` | v1+ |
-| 15 | `LEFT_HOOK` | v1+ |
-| 16 | `RIGHT_HOOK` | v1+ |
-| 17 | `FORWARD_JUMP` | v1+ |
-| 18 | `STEALTH_WALK` | v1+ |
-| 19 | `INJURED_WALK` | v1+ |
-| 20 | `LEDGE_WALKING` | v2+ |
-| 21 | `OBJECT_CARRYING` | v2+ |
-| 22 | `STEALTH_WALK_2` | v2+ |
-| 23 | `HAPPY_DANCE_WALK` | v2+ |
-| 24 | `ZOMBIE_WALK` | v2+ |
-| 25 | `GUN_WALK` | v2+ |
-| 26 | `SCARE_WALK` | v2+ |
+| mode | name |
+|---|---|
+| 0 | `IDLE` |
+| 1 | `SLOW_WALK` |
+| 2 | `WALK` |
+| 3 | `RUN` |
+| 4 | `IDLE_SQUAT` |
+| 5 | `IDLE_KNEEL_TWO_LEGS` |
+| 6 | `IDLE_KNEEL` |
+| 7 | `IDLE_LYING` |
+| 8 | `IDLE_CRAWLING` |
+| 9 | `IDLE_BOXING` |
+| 10 | `WALK_BOXING` |
+| 11 | `LEFT_PUNCH` |
+| 12 | `RIGHT_PUNCH` |
+| 13 | `RANDOM_PUNCH` |
+| 14 | `ELBOW_CRAWLING` |
+| 15 | `LEFT_HOOK` |
+| 16 | `RIGHT_HOOK` |
+| 17 | `FORWARD_JUMP` |
+| 18 | `STEALTH_WALK` |
+| 19 | `INJURED_WALK` |
 
 ## Encoder Modes
 
