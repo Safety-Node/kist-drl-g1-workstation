@@ -24,10 +24,10 @@
 
 **Output:**
 
-| field | shape | description |
-|---|---|---|
-| `mujoco_qpos` | `[1, 64, 36]` | future trajectory (64 frames × 36 joints) |
-| `num_pred_frames` | `[1]` | number of predicted frames |
+| range | field | shape | description |
+|---|---|---|---|
+| `[1]` | `mujoco_qpos` | `[1,64,36]` | future trajectory — 64 frames × 36 (7 floating base + 29 joints in mujoco order), float32 |
+| `[2]` | `num_pred_frames` | `[1]` | number of valid predicted frames, int32 |
 
 ## Encoder Modes
 
