@@ -4,7 +4,7 @@ GearSonic locomotion trajectory planner. Generates full-body reference trajector
 
 ## Architecture
 
-![Planner Architecture](planner_architecture.png)
+![Planner Architecture](docs/planner_architecture.png)
 
 ## Model
 
