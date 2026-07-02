@@ -60,10 +60,8 @@ class PlannerInputBuilder:
         Args:
             g1_provider: UnitreeG1Provider instance (must be started).
         """
-        cfg = _load_config()
+        self._config = _load_config()
         self._g1 = g1_provider
-        self._default_height: float = cfg["default_height"]
-        self._allowed_tokens: list  = cfg["allowed_pred_num_tokens"]
         self._context = np.zeros((4, 36), dtype=np.float32)
         self._joint_name_to_idx: Optional[dict] = None
 
@@ -104,7 +102,7 @@ class PlannerInputBuilder:
         frame = np.zeros(36, dtype=np.float32)
         frame[0] = 0.0
         frame[1] = 0.0
-        frame[2] = self._default_height
+        frame[2] = self._config["default_height"]
         frame[3] = 1.0   # qw
         frame[4] = 0.0   # qx
         frame[5] = 0.0   # qy
@@ -191,7 +189,7 @@ class PlannerInputBuilder:
             "has_specific_target":       np.zeros((1, 1), dtype=np.int64),
             "specific_target_positions": np.zeros((1, 4, 3), dtype=np.float32),
             "specific_target_headings":  np.zeros((1, 4), dtype=np.float32),
-            "allowed_pred_num_tokens":   np.array([self._allowed_tokens], dtype=np.int64),
+            "allowed_pred_num_tokens":   np.array([self._config["allowed_pred_num_tokens"]], dtype=np.int64),
             "height":                    np.array([-1.0], dtype=np.float32),
         }
 
