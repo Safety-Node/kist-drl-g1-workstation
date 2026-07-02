@@ -1,0 +1,6 @@
+# Components with no dependencies (boot index 0)
+# These are started first before any dependency resolution.
+
+zero_boot:
+  - PicoVRReader
+  - PlannerOnnxRuntime
