@@ -72,13 +72,21 @@ class PlannerInputBuilder:
 
     def initialize(self) -> bool:
         """
-        Fill context with current robot state repeated 4 times.
+        Fill context_mujoco_qpos with current robot state repeated 4 times.
+        Matches C++ InitializeContext.
 
-        Position normalized to [0, 0, default_height].
-        Quaternion set to identity (zero yaw), matching C++ InitializeContext.
-        Joints read from robot sensor, converted mujoco→isaaclab order.
+        Input:
+            g1_provider.joint_state   — robot joint positions (29 joints, mujoco order)
 
-        Returns True on success.
+        Process:
+            pos  = [0, 0, default_height]   — normalized origin
+            quat = [1, 0, 0, 0]             — identity (zero yaw)
+            joints[isaac_i] = joint_pos[mujoco_i]   — mujoco→isaaclab remap
+            context[0..3] = frame           — 4 identical frames
+
+        Output:
+            self._context  (4, 36) float32 — [pos(3), quat(4), joints_isaaclab(29)]
+            Returns True on success, False if robot state unavailable.
         """
         joint_pos = self._read_joint_pos_mujoco()
         if joint_pos is None:
@@ -104,24 +112,27 @@ class PlannerInputBuilder:
 
     def update_from_trajectory(self, trajectory: np.ndarray, gen_frame: int) -> None:
         """
-        Update context by resampling previous planner trajectory at 30Hz intervals.
+        Update context_mujoco_qpos by resampling previous planner trajectory.
         Matches C++ UpdateContextFromMotion.
 
         Input:
-            trajectory  [N, 36] float32 — planner mujoco_qpos output (N ≤ 64, 30Hz)
+            trajectory  (N, 36) float32 — planner mujoco_qpos output (N ≤ 64, 30Hz)
                         [0:3] pos, [3:7] quat wxyz, [7:36] joints in isaaclab order
-            gen_frame   current playback frame index (50Hz counter)
+            gen_frame   int — current playback frame index (50Hz counter)
 
         Process:
             For each of 4 context frames n=0..3:
-                t = gen_frame/50 + n/30          (sample time in seconds)
-                f_30hz = t * 30                  (fractional 30Hz frame index)
-                f0, f1  = floor/ceil of f_30hz   (clamped to trajectory length)
-                w0 = 1 - (f_30hz - f0)
+                t      = gen_frame/50 + n/30     — sample time in seconds
+                f_30hz = t * 30                  — fractional 30Hz frame index
+                f0, f1 = floor/ceil of f_30hz    — clamped to [0, N-1]
+                w0     = 1 - (f_30hz - f0)
 
                 pos    = lerp(traj[f0, 0:3], traj[f1, 0:3], w1)
-                quat   = slerp(traj[f0, 3:7], traj[f1, 3:7], frac)
-                joints = lerp(traj[f0, 7:], traj[f1, 7:], w1)  — isaaclab order, direct copy
+                quat   = slerp(traj[f0, 3:7], traj[f1, 3:7], f_30hz - f0)
+                joints = lerp(traj[f0, 7:], traj[f1, 7:], w1)   — isaaclab order, direct copy
+
+        Output:
+            self._context  (4, 36) float32 updated in-place
         """
         T = len(trajectory)
         gen_time = gen_frame / 50.0
