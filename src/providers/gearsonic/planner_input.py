@@ -12,7 +12,6 @@ Planner ONNX output mujoco_qpos has joints in isaaclab order at [7:36].
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import yaml
@@ -40,30 +39,9 @@ class PlannerInputBuilder:
         11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28,
     ]
 
-    # 29 joint names in mujoco order (matches policy_params.py)
-    _ALL_JOINT_NAMES = [
-        "left_hip_pitch",       "left_hip_roll",       "left_hip_yaw",
-        "left_knee",            "left_ankle_pitch",    "left_ankle_roll",
-        "right_hip_pitch",      "right_hip_roll",      "right_hip_yaw",
-        "right_knee",           "right_ankle_pitch",   "right_ankle_roll",
-        "waist_yaw",            "waist_roll",          "waist_pitch",
-        "left_shoulder_pitch",  "left_shoulder_roll",  "left_shoulder_yaw",
-        "left_elbow",           "left_wrist_roll",     "left_wrist_pitch",
-        "left_wrist_yaw",
-        "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw",
-        "right_elbow",          "right_wrist_roll",    "right_wrist_pitch",
-        "right_wrist_yaw",
-    ]
-
-    def __init__(self, g1_provider):
-        """
-        Args:
-            g1_provider: UnitreeG1Provider instance (must be started).
-        """
+    def __init__(self):
         self._config = _load_config()
-        self._g1 = g1_provider
         self._context = np.zeros((4, 36), dtype=np.float32)
-        self._joint_name_to_idx: Optional[dict] = None
 
         # operator-controlled inputs — set externally before build()
         self.target_vel: float = 0.0
@@ -76,13 +54,13 @@ class PlannerInputBuilder:
     # Public API
     # ------------------------------------------------------------------
 
-    def initialize(self) -> bool:
+    def initialize(self, joint_pos_mujoco: np.ndarray) -> None:
         """
         Fill context_mujoco_qpos with current robot state repeated 4 times.
         Matches C++ InitializeContext.
 
         Input:
-            g1_provider.joint_state   — robot joint positions (29 joints, mujoco order)
+            joint_pos_mujoco  (29,) float32 — joint positions in mujoco order
 
         Process:
             pos  = [0, 0, default_height]   — normalized origin
@@ -91,14 +69,8 @@ class PlannerInputBuilder:
             context[0..3] = frame           — 4 identical frames
 
         Output:
-            self._context  (4, 36) float32 — [pos(3), quat(4), joints_isaaclab(29)]
-            Returns True on success, False if robot state unavailable.
+            self._context  (4, 36) float32 updated in-place
         """
-        joint_pos = self._read_joint_pos_mujoco()
-        if joint_pos is None:
-            logger.error("PlannerInputBuilder.initialize: robot joint state unavailable")
-            return False
-
         frame = np.zeros(36, dtype=np.float32)
         frame[0] = 0.0
         frame[1] = 0.0
@@ -108,13 +80,12 @@ class PlannerInputBuilder:
         frame[5] = 0.0   # qy
         frame[6] = 0.0   # qz
         for mujoco_i, isaac_i in enumerate(self._MUJOCO_TO_ISAACLAB):
-            frame[7 + isaac_i] = joint_pos[mujoco_i]
+            frame[7 + isaac_i] = joint_pos_mujoco[mujoco_i]
 
         for n in range(4):
             self._context[n] = frame
 
         logger.info("PlannerInputBuilder: context initialized")
-        return True
 
     def update_from_trajectory(self, trajectory: np.ndarray, gen_frame: int) -> None:
         """
@@ -192,28 +163,6 @@ class PlannerInputBuilder:
             "allowed_pred_num_tokens":   np.array([self._config["allowed_pred_num_tokens"]], dtype=np.int64),
             "height":                    np.array([-1.0], dtype=np.float32),
         }
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    def _read_joint_pos_mujoco(self) -> Optional[np.ndarray]:
-        """Read 29 joint positions from robot in mujoco order. Returns None on failure."""
-        js_cache = self._g1.joint_state
-        if js_cache.last_seen_ts == 0.0 or js_cache.value is None:
-            return None
-        js = js_cache.value
-        if self._joint_name_to_idx is None:
-            self._joint_name_to_idx = {n: i for i, n in enumerate(js.name)}
-        try:
-            return np.array(
-                [js.position[self._joint_name_to_idx[n]] for n in self._ALL_JOINT_NAMES],
-                dtype=np.float32,
-            )
-        except (KeyError, IndexError):
-            self._joint_name_to_idx = None
-            return None
-
 
 # ------------------------------------------------------------------
 # Module-level helper
