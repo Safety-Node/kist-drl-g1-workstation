@@ -1,5 +1,9 @@
 # GearSonic — Planner
 
+## Architecture
+
+<!-- TODO: insert architecture diagram -->
+
 ## Model
 
 | model | description |
