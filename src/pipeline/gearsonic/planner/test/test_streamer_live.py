@@ -17,14 +17,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../.."))
 
 from src.boot_manager.service_manager import ServiceManager
 from src.pipeline.pico_vr.reader import PicoVRReader
-from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerCommand, PlannerStreamer
+from src.pipeline.gearsonic.planner.streamer import PlannerStreamer
 from src.providers.nav_types import NavVelCmd
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
 DUMMY_NAV = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
-PRINT_HZ  = 10
 
 
 class _MockNav:
@@ -34,17 +33,6 @@ class _MockNav:
     @property
     def vel_cmd(self) -> Optional[NavVelCmd]:
         return self._vel_cmd
-
-
-def _fmt(cmd: PlannerCommand, mode: Optional[int]) -> str:
-    mode_str = f"{mode:+d}" if mode is not None else " ?"
-    return (
-        f"input={mode_str}  "
-        f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
-        f"vel={cmd.target_vel:6.3f}  "
-        f"move=[{cmd.movement_direction[0]:6.3f}, {cmd.movement_direction[1]:6.3f}]  "
-        f"face=[{cmd.facing_direction[0]:6.3f}, {cmd.facing_direction[1]:6.3f}]"
-    )
 
 
 # ------------------------------------------------------------------
@@ -64,55 +52,40 @@ def test_idle(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = None
     print("[1] Idle (no joystick, no nav) ... ", end="", flush=True)
     while True:
-        cmd  = streamer.command
-        mode = streamer.input_mode
-        if cmd is not None and mode == -1:
+        if streamer.input_mode == -1:
             print(PASS)
-            print(f"  {_fmt(cmd, mode)}")
             return True
-        time.sleep(1.0 / PRINT_HZ)
+        time.sleep(0.05)
 
 
 def test_controller(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = None
-    print("[2] Controller — move left joystick")
+    print("[2] Controller — move left joystick ... ", end="", flush=True)
     while True:
-        cmd  = streamer.command
-        mode = streamer.input_mode
-        if cmd is not None and mode is not None:
-            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
-            if mode == 1:
-                print(f"\n  {PASS}")
-                return True
-        time.sleep(1.0 / PRINT_HZ)
+        if streamer.input_mode == 1:
+            print(PASS)
+            return True
+        time.sleep(0.05)
 
 
 def test_nav_only(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = DUMMY_NAV
-    print("[3] Nav only — release joystick")
+    print("[3] Nav only — release joystick ... ", end="", flush=True)
     while True:
-        cmd  = streamer.command
-        mode = streamer.input_mode
-        if cmd is not None and mode is not None:
-            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
-            if mode == 0:
-                print(f"\n  {PASS}")
-                return True
-        time.sleep(1.0 / PRINT_HZ)
+        if streamer.input_mode == 0:
+            print(PASS)
+            return True
+        time.sleep(0.05)
 
 
 def test_nav_ctrl(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = DUMMY_NAV
-    print("[4] Nav + ctrl — move joystick to override nav")
+    print("[4] Nav + ctrl — move joystick to override nav ... ", end="", flush=True)
     while True:
-        cmd  = streamer.command
-        mode = streamer.input_mode
-        if cmd is not None and mode is not None:
-            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
-            if mode == 1:
-                print(f"\n  {PASS}")
-                return True
-        time.sleep(1.0 / PRINT_HZ)
+        if streamer.input_mode == 1:
+            print(PASS)
+            return True
+        time.sleep(0.05)
 
 
 # ------------------------------------------------------------------
