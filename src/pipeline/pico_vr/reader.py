@@ -31,7 +31,7 @@ class PicoVRBodyPose:
     body_poses_np: np.ndarray    # (24, 7) [x,y,z,qx,qy,qz,qw] Unity frame, scalar-last
     timestamp_ns: int            # xrt.get_time_stamp_ns()
     timestamp_monotonic: float   # time.monotonic()
-    dt: float                    # 직전 프레임 대비 경과 시간 (s)
+    dt: float                    # elapsed time since previous frame (s)
     fps: float                   # instantaneous FPS
 
 
