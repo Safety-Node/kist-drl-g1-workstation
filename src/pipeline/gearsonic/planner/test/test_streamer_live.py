@@ -8,7 +8,6 @@ Run:
   uv run src/pipeline/gearsonic/planner/test/test_streamer_live.py
 """
 
-import math
 import os
 import sys
 import time
@@ -24,9 +23,8 @@ from src.providers.navigation_provider import NavigationProvider, NavVelCmd
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
-DUMMY_NAV       = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
-PRINT_HZ        = 10
-JOYSTICK_DEADZONE = 0.15  # matches streamer_config.yaml
+DUMMY_NAV = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
+PRINT_HZ  = 10
 
 
 class _MockNav:
@@ -38,16 +36,10 @@ class _MockNav:
         return self._vel_cmd
 
 
-def _joystick_active(reader: PicoVRReader) -> bool:
-    ctrl = reader.controller
-    if ctrl is None:
-        return False
-    lx, ly = ctrl.left_joystick
-    return math.hypot(lx, ly) > JOYSTICK_DEADZONE
-
-
-def _fmt(cmd: PlannerCommand) -> str:
+def _fmt(cmd: PlannerCommand, mode: Optional[int]) -> str:
+    mode_str = f"{mode:+d}" if mode is not None else " ?"
     return (
+        f"input={mode_str}  "
         f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
         f"vel={cmd.target_vel:6.3f}  "
         f"move=[{cmd.movement_direction[0]:6.3f}, {cmd.movement_direction[1]:6.3f}]  "
@@ -68,52 +60,56 @@ def test_connection(reader: PicoVRReader) -> bool:
         time.sleep(0.2)
 
 
-def test_idle(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+def test_idle(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = None
     print("[1] Idle (no joystick, no nav) ... ", end="", flush=True)
     while True:
-        cmd = streamer.command
-        if cmd is not None:
+        cmd  = streamer.command
+        mode = streamer.input_mode
+        if cmd is not None and mode == -1:
             print(PASS)
-            print(f"  {_fmt(cmd)}")
+            print(f"  {_fmt(cmd, mode)}")
             return True
         time.sleep(1.0 / PRINT_HZ)
 
 
-def test_controller(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+def test_controller(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = None
     print("[2] Controller — move left joystick")
     while True:
-        cmd = streamer.command
-        if cmd is not None:
-            print(f"\r  {_fmt(cmd)}", end="", flush=True)
-            if _joystick_active(reader):
+        cmd  = streamer.command
+        mode = streamer.input_mode
+        if cmd is not None and mode is not None:
+            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
+            if mode == 1:
                 print(f"\n  {PASS}")
                 return True
         time.sleep(1.0 / PRINT_HZ)
 
 
-def test_nav_only(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+def test_nav_only(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = DUMMY_NAV
     print("[3] Nav only — release joystick")
     while True:
-        cmd = streamer.command
-        if cmd is not None:
-            print(f"\r  {_fmt(cmd)}", end="", flush=True)
-            if not _joystick_active(reader):
+        cmd  = streamer.command
+        mode = streamer.input_mode
+        if cmd is not None and mode is not None:
+            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
+            if mode == 0:
                 print(f"\n  {PASS}")
                 return True
         time.sleep(1.0 / PRINT_HZ)
 
 
-def test_nav_ctrl(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+def test_nav_ctrl(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
     mock_nav._vel_cmd = DUMMY_NAV
     print("[4] Nav + ctrl — move joystick to override nav")
     while True:
-        cmd = streamer.command
-        if cmd is not None:
-            print(f"\r  {_fmt(cmd)}", end="", flush=True)
-            if _joystick_active(reader):
+        cmd  = streamer.command
+        mode = streamer.input_mode
+        if cmd is not None and mode is not None:
+            print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
+            if mode == 1:
                 print(f"\n  {PASS}")
                 return True
         time.sleep(1.0 / PRINT_HZ)
@@ -139,10 +135,10 @@ def main() -> None:
 
         steps = [
             ("Connection",  lambda: test_connection(reader)),
-            ("Idle",        lambda: test_idle(streamer, reader, mock_nav)),
-            ("Controller",  lambda: test_controller(streamer, reader, mock_nav)),
-            ("Nav only",    lambda: test_nav_only(streamer, reader, mock_nav)),
-            ("Nav + ctrl",  lambda: test_nav_ctrl(streamer, reader, mock_nav)),
+            ("Idle",        lambda: test_idle(streamer, mock_nav)),
+            ("Controller",  lambda: test_controller(streamer, mock_nav)),
+            ("Nav only",    lambda: test_nav_only(streamer, mock_nav)),
+            ("Nav + ctrl",  lambda: test_nav_ctrl(streamer, mock_nav)),
         ]
 
         results = {}

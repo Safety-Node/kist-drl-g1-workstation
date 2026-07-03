@@ -70,6 +70,7 @@ class PlannerStreamer:
 
         self._lock = threading.Lock()
         self._latest_command: Optional[PlannerCommand] = None
+        self._latest_input_mode: Optional[int] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -112,6 +113,11 @@ class PlannerStreamer:
         with self._lock:
             return self._latest_command
 
+    @property
+    def input_mode(self) -> Optional[int]:
+        with self._lock:
+            return self._latest_input_mode
+
     # ------------------------------------------------------------------
     # Background polling
     # ------------------------------------------------------------------
@@ -128,6 +134,7 @@ class PlannerStreamer:
                 cmd = self._compute_default()
                 with self._lock:
                     self._latest_command = cmd
+                    self._latest_input_mode = mode
                 time.sleep(0.002)
                 continue
             elif mode == 1:
@@ -136,6 +143,7 @@ class PlannerStreamer:
                 cmd = self._compute_from_nav(nav_vel_cmd)
             with self._lock:
                 self._latest_command = cmd
+                self._latest_input_mode = mode
             time.sleep(self._config["dt"])
 
     def _input_mode(self, pico_vr_controller: Optional[PicoVRController], nav_vel_cmd: Optional[NavVelCmd]) -> int:
