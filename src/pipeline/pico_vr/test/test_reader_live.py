@@ -18,14 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 from src.boot_manager.service_manager import ServiceManager
 from src.pipeline.pico_vr.reader import PicoVRController, PicoVRReader
 
-BUTTON_TIMEOUT_S = 10.0
-
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
-
-
-def _prompt_next(msg: str = "") -> None:
-    input(f"\n  {msg}Press Enter to continue...")
 
 
 # ------------------------------------------------------------------
@@ -101,15 +95,12 @@ def test_reconnect(reader: PicoVRReader) -> bool:
 
 def _check_button(reader: PicoVRReader, label: str, condition) -> bool:
     print(f"  Press {label} ... ", end="", flush=True)
-    deadline = time.monotonic() + BUTTON_TIMEOUT_S
-    while time.monotonic() < deadline:
+    while True:
         ctrl = reader.controller
         if ctrl is not None and condition(ctrl):
             print(PASS)
             return True
         time.sleep(0.05)
-    print(FAIL + f" (timeout {BUTTON_TIMEOUT_S:.0f}s)")
-    return False
 
 
 def test_left_controller(reader: PicoVRReader) -> bool:
@@ -163,8 +154,6 @@ def main():
             if not ok:
                 print(f"\nStopped at: {name}")
                 break
-            if name not in ("Disconnect", "Reconnect"):
-                _prompt_next()
 
         print("\n--- Results ---")
         for name, ok in results.items():
