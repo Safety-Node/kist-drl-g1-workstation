@@ -1,12 +1,18 @@
+import logging
 import math
+import threading
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import yaml
 
-from src.providers.pico_vr.reader import PicoVRController
+from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent / "streamer_config.yaml"
 
@@ -68,7 +74,7 @@ class _YawAccumulator:
 
 class PlannerStreamer:
 
-    depends_on = [PicoVRController]
+    depends_on = [PicoVRReader]
 
     def __init__(self):
         self._config = _load_config()
@@ -77,13 +83,65 @@ class PlannerStreamer:
         self._prev_ab = False
         self._prev_xy = False
 
-    def reset(self) -> None:
-        self._yaw.reset()
-        self._mode = LocomotionMode.IDLE
-        self._prev_ab = False
-        self._prev_xy = False
+        self._lock = threading.Lock()
+        self._latest_command: Optional[PlannerCommand] = None
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self.ready_event = threading.Event()
 
-    def update(self, controller: PicoVRController) -> PlannerCommand:
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="planner_streamer",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("PlannerStreamer started")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                logger.warning("PlannerStreamer: thread did not stop within 2s")
+        self._thread = None
+        logger.info("PlannerStreamer stopped")
+
+    # ------------------------------------------------------------------
+    # Data access
+    # ------------------------------------------------------------------
+
+    @property
+    def command(self) -> Optional[PlannerCommand]:
+        with self._lock:
+            return self._latest_command
+
+    # ------------------------------------------------------------------
+    # Background polling
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        reader = PicoVRReader()
+        while not self._stop_event.is_set():
+            controller = reader.controller
+            if controller is None:
+                time.sleep(self._config["dt"])
+                continue
+
+            cmd = self._compute(controller)
+            with self._lock:
+                self._latest_command = cmd
+                if not self.ready_event.is_set():
+                    self.ready_event.set()
+
+    def _compute(self, controller: PicoVRController) -> PlannerCommand:
         # --- mode switching (rising edge) ---
         ab_now = controller.btn_a and controller.btn_b
         xy_now = controller.btn_x and controller.btn_y
