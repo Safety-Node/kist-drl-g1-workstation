@@ -68,9 +68,9 @@ class PicoVRReader:
         self._config = _load_config()
 
         self._lock = threading.Lock()
-        self._latest: Optional[PicoVRBodyPose] = None
-        self._latest_pose: Optional[PicoVRPose] = None
-        self._latest_controller: Optional[PicoVRController] = None
+        self._latest_body_pose: Optional[PicoVRBodyPose] = None
+        self._latest_body_pose_pose: Optional[PicoVRPose] = None
+        self._latest_body_pose_controller: Optional[PicoVRController] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -123,17 +123,17 @@ class PicoVRReader:
     @property
     def body_pose(self) -> Optional[PicoVRBodyPose]:
         with self._lock:
-            return self._latest
+            return self._latest_body_pose
 
     @property
     def pose(self) -> Optional[PicoVRPose]:
         with self._lock:
-            return self._latest_pose
+            return self._latest_body_pose_pose
 
     @property
     def controller(self) -> Optional[PicoVRController]:
         with self._lock:
-            return self._latest_controller
+            return self._latest_body_pose_controller
 
     @property
     def connected(self) -> bool:
@@ -196,9 +196,9 @@ class PicoVRReader:
                     btn_y=bool(xrt.get_Y_button()),
                 )
                 with self._lock:
-                    self._latest = body_pose
-                    self._latest_pose = pose
-                    self._latest_controller = controller
+                    self._latest_body_pose = body_pose
+                    self._latest_body_pose_pose = pose
+                    self._latest_body_pose_controller = controller
                     self._connected = True
                 self._last_new_data_mono = now_mono
 
@@ -215,6 +215,6 @@ class PicoVRReader:
                         elapsed,
                     )
                 self._connected = False
-                self._latest = None
-                self._latest_pose = None
-                self._latest_controller = None
+                self._latest_body_pose = None
+                self._latest_body_pose_pose = None
+                self._latest_body_pose_controller = None
