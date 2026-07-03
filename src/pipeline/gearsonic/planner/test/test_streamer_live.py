@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../.."))
 from src.boot_manager.service_manager import ServiceManager
 from src.pipeline.pico_vr.reader import PicoVRReader
 from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerCommand, PlannerStreamer
-from src.providers.navigation_provider import NavigationProvider, NavVelCmd
+from src.providers.nav_types import NavVelCmd
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
@@ -121,10 +121,10 @@ def test_nav_ctrl(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
 
 def main() -> None:
     mock_nav = _MockNav()
-    NavigationProvider._singleton_class._singleton_instance = mock_nav
 
     reader   = PicoVRReader()
     streamer = PlannerStreamer()
+    streamer.set_nav_source(mock_nav)
 
     manager = ServiceManager()
     manager.register(reader)
@@ -160,7 +160,6 @@ def main() -> None:
     finally:
         streamer.stop()
         manager.stop()
-        NavigationProvider.reset()
 
 
 if __name__ == "__main__":

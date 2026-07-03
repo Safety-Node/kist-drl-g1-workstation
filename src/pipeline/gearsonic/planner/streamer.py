@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 import yaml
 
-from src.providers.navigation_provider import NavigationProvider, NavVelCmd
+from src.providers.nav_types import NavVelCmd
 from src.pipeline.pico_vr.reader import PicoVRController, PicoVRReader
 from src.providers.singleton import singleton
 
@@ -63,7 +63,7 @@ class LocomotionMode(IntEnum):
 @singleton
 class PlannerStreamer:
 
-    depends_on = [PicoVRReader, NavigationProvider]
+    depends_on = [PicoVRReader]
 
     def __init__(self):
         self._config = _load_config()
@@ -78,6 +78,7 @@ class PlannerStreamer:
         self._yaw: float = 0.0
         self._prev_ab = False
         self._prev_xy = False
+        self._nav_source = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -118,13 +119,20 @@ class PlannerStreamer:
         with self._lock:
             return self._latest_input_mode
 
+    def set_nav_source(self, source) -> None:
+        self._nav_source = source
+
     # ------------------------------------------------------------------
     # Background polling
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
         pico_vr_reader = PicoVRReader()
-        nav_provider = NavigationProvider()
+        if self._nav_source is not None:
+            nav_provider = self._nav_source
+        else:
+            from src.providers.navigation_provider import NavigationProvider
+            nav_provider = NavigationProvider()
         
         while not self._stop_event.is_set():
             pico_vr_controller = pico_vr_reader.controller

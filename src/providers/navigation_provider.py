@@ -33,6 +33,8 @@ import math
 import threading
 import time
 from dataclasses import dataclass, field
+
+from .nav_types import NavVelCmd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -123,12 +125,6 @@ def _load_nav_config() -> NavigationProviderConfig:
         locations_file     = raw.get("locations_file", "src/providers/config/navigation/locations.json5"),
     )
 
-
-@dataclass(frozen=True)
-class NavVelCmd:
-    vx: float = 0.0
-    vy: float = 0.0
-    vyaw: float = 0.0
 
 
 @dataclass(frozen=True)
