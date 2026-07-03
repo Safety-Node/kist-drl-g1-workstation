@@ -159,7 +159,8 @@ class PlannerStreamer:
     def _input_mode(self, pico_vr_controller: Optional[PicoVRController], nav_vel_cmd: Optional[NavVelCmd]) -> int:
         if pico_vr_controller is not None:
             lx, ly = pico_vr_controller.left_joystick
-            if math.hypot(lx, ly) > self._config["joystick_deadzone"]:
+            rx, _  = pico_vr_controller.right_joystick
+            if math.hypot(lx, ly) > self._config["joystick_deadzone"] or abs(rx) > self._config["joystick_deadzone"]:
                 return 1
         if nav_vel_cmd is not None:
             return 0
