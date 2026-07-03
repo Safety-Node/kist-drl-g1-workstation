@@ -20,6 +20,15 @@ def _load_config() -> dict:
     }
 
 
+@dataclass
+class PlannerCommand:
+    mode: int
+    target_vel: float
+    movement_direction: np.ndarray  # (3,) float32 unit vector
+    facing_direction: np.ndarray    # (3,) float32 unit vector
+    random_seed: int
+
+
 class LocomotionMode(IntEnum):
     IDLE                = 0
     SLOW_WALK           = 1
@@ -41,15 +50,6 @@ class LocomotionMode(IntEnum):
     FORWARD_JUMP        = 17
     STEALTH_WALK        = 18
     INJURED_WALK        = 19
-
-
-@dataclass
-class PlannerCommand:
-    mode: int
-    target_vel: float
-    movement_direction: np.ndarray  # (3,) float32 unit vector
-    facing_direction: np.ndarray    # (3,) float32 unit vector
-    random_seed: int
 
 
 class _YawAccumulator:
