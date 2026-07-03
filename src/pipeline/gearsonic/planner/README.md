@@ -6,12 +6,6 @@ GearSonic locomotion trajectory planner. Generates full-body reference trajector
 
 ![Planner Architecture](docs/planner_architecture.png)
 
-## Model
-
-| model | description |
-|---|---|
-| `planner_sonic.onnx` | locomotion trajectory planner |
-
 ## Locomotion Modes
 
 | mode | name |
@@ -37,7 +31,13 @@ GearSonic locomotion trajectory planner. Generates full-body reference trajector
 | 18 | `STEALTH_WALK` |
 | 19 | `INJURED_WALK` |
 
-## Input
+## Model
+
+| model | description |
+|---|---|
+| `planner_sonic.onnx` | locomotion trajectory planner |
+
+### Input
 
 | field | shape | type | description |
 |---|---|---|---|
@@ -53,7 +53,7 @@ GearSonic locomotion trajectory planner. Generates full-body reference trajector
 | `allowed_pred_num_tokens` | `[1, 11]` | int64 | prediction token mask (default: [1,1,1,1,1,1,0,0,0,0,0]) |
 | `height` | `[1]` | float32 | target body height in meters (−1 = model default) |
 
-## Output
+### Output
 
 | field | shape | type | description |
 |---|---|---|---|
