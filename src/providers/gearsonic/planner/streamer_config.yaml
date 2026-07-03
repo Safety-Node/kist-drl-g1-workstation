@@ -1,0 +1,6 @@
+# PlannerStreamer runtime configuration
+
+streamer:
+  joystick_deadzone: 0.15
+  yaw_speed: 1.5        # rad/s at rx=1.0
+  dt: 0.05              # seconds per update tick

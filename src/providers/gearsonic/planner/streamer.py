@@ -1,10 +1,23 @@
 import math
 from dataclasses import dataclass
 from enum import IntEnum
+from pathlib import Path
 
 import numpy as np
+import yaml
 
 from src.providers.pico_vr.reader import PicoVRController
+
+_CONFIG_PATH = Path(__file__).parent / "streamer_config.yaml"
+
+
+def _load_config() -> dict:
+    raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+    return {
+        "joystick_deadzone": raw["streamer"]["joystick_deadzone"],
+        "yaw_speed":         raw["streamer"]["yaw_speed"],
+        "dt":                raw["streamer"]["dt"],
+    }
 
 
 class LocomotionMode(IntEnum):
@@ -39,20 +52,17 @@ class PlannerCommand:
     random_seed: int
 
 
-_JOYSTICK_DEADZONE = 0.15
-_YAW_SPEED = 1.5  # rad/s at rx=1.0
-
-
 class _YawAccumulator:
 
-    def __init__(self):
+    def __init__(self, yaw_speed: float):
         self._yaw = 0.0
+        self._yaw_speed = yaw_speed
 
     def reset(self) -> None:
         self._yaw = 0.0
 
     def update(self, rx: float, dt: float) -> np.ndarray:
-        self._yaw += rx * _YAW_SPEED * dt
+        self._yaw += rx * self._yaw_speed * dt
         return np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
 
 
@@ -60,10 +70,10 @@ class PlannerStreamer:
 
     depends_on = [PicoVRController]
 
-    def __init__(self, dt: float = 0.05):
-        self._dt = dt
+    def __init__(self):
+        self._config = _load_config()
         self._mode = LocomotionMode.IDLE
-        self._yaw = _YawAccumulator()
+        self._yaw = _YawAccumulator(self._config["yaw_speed"])
         self._prev_ab = False
         self._prev_xy = False
 
@@ -88,16 +98,16 @@ class PlannerStreamer:
         rx, _  = controller.right_joystick
 
         # --- facing direction ---
-        facing = self._yaw.update(rx, self._dt)  # (2,) unit vector
+        facing = self._yaw.update(rx, self._config["dt"])  # (2,) unit vector
 
         # --- movement direction + speed ---
         raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
-        if raw_mag < _JOYSTICK_DEADZONE:
+        if raw_mag < self._config["joystick_deadzone"]:
             mag = 0.0
             target_vel = -1.0
             mode_to_send = LocomotionMode.IDLE
         else:
-            mag = (raw_mag - _JOYSTICK_DEADZONE) / (1.0 - _JOYSTICK_DEADZONE)
+            mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
             mode_to_send = self._mode
             if self._mode == LocomotionMode.SLOW_WALK:
                 target_vel = 0.1 + 0.5 * mag
