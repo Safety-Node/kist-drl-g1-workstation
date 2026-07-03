@@ -80,15 +80,17 @@ class PlannerStreamer:
 
     def __init__(self):
         self._config = _load_config()
+
+        self._lock = threading.Lock()
+        self._latest_command: Optional[PlannerCommand] = None
+
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
         self._mode = LocomotionMode.IDLE
         self._yaw = _YawAccumulator(self._config["yaw_speed"])
         self._prev_ab = False
         self._prev_xy = False
-
-        self._lock = threading.Lock()
-        self._latest_command: Optional[PlannerCommand] = None
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,8 +142,7 @@ class PlannerStreamer:
             with self._lock:
                 self._latest_command = cmd
 
-    def _compute(self, controller: PicoVRController) -> PlannerCommand:
-        # --- mode switching (rising edge) ---
+    def _update_mode(self, controller: PicoVRController) -> None:
         ab_now = controller.btn_a and controller.btn_b
         xy_now = controller.btn_x and controller.btn_y
         if ab_now and not self._prev_ab:
@@ -150,6 +151,9 @@ class PlannerStreamer:
             self._mode = LocomotionMode(max(LocomotionMode.IDLE, self._mode - 1))
         self._prev_ab = ab_now
         self._prev_xy = xy_now
+
+    def _compute(self, controller: PicoVRController) -> PlannerCommand:
+        self._update_mode(controller)
 
         lx, ly = controller.left_joystick
         rx, _  = controller.right_joystick
