@@ -32,7 +32,7 @@ CLAUDE.md
 
 # pico_vr external dependencies
 src/pipeline/pico_vr/XRoboToolkit-PC-Service-Pybind/
-src/pipeline/pico_vr/*.deb
+*.deb
 
 # Debug files
 front_image.jpg
