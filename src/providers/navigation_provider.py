@@ -125,14 +125,22 @@ def _load_nav_config() -> NavigationProviderConfig:
 
 
 @dataclass(frozen=True)
-class NavigationState:
-    t_monotonic: float
+class NavVelCmd:
     vx: float = 0.0
     vy: float = 0.0
     vyaw: float = 0.0
+
+
+@dataclass(frozen=True)
+class NavState:
+    t_monotonic: float
+    vel: NavVelCmd = NavVelCmd()
     mode: str = "IDLE"    # IDLE / NAVIGATING / ALIGNING / ARRIVED / ESTOP / WAITING_POSE / PLANNING
     goal_id: Optional[str] = None
     dist_to_goal: float = 0.0
+
+
+NavigationState = NavState  # backwards compatibility alias
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +414,9 @@ class NavigationProvider:
                          min(self._config.max_vyaw, self._config.kp_yaw * hdg_err))
 
         self._unitree_g1.publish_twist(vx_body, vy_body, vyaw)
-        self._set_state(NavigationState(
+        self._set_state(NavState(
             t_monotonic=now,
-            vx=vx_body, vy=vy_body, vyaw=vyaw,
+            vel=NavVelCmd(vx=vx_body, vy=vy_body, vyaw=vyaw),
             mode="NAVIGATING",
             goal_id=goal_id,
             dist_to_goal=dist,
