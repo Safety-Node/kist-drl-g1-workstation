@@ -4,16 +4,11 @@ Live test for PlannerStreamer.
 NavigationProvider is NOT started — a mock is injected via singleton slot.
 Requires PicoVR headset connected.
 
-Steps:
-  [1] Idle        — no joystick, no nav        → _compute_default
-  [2] Controller  — move joystick, no nav      → _compute_from_controller
-  [3] Nav only    — dummy nav, idle joystick   → _compute_from_nav
-  [4] Nav + ctrl  — dummy nav + joystick       → _compute_from_controller (interrupt)
-
 Run:
   uv run src/pipeline/gearsonic/planner/test/test_streamer_live.py
 """
 
+import math
 import os
 import sys
 import time
@@ -27,9 +22,11 @@ from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerComma
 from src.providers.navigation_provider import NavigationProvider, NavVelCmd
 
 PASS = "\033[92mPASS\033[0m"
+FAIL = "\033[91mFAIL\033[0m"
 
-DUMMY_NAV = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
-PRINT_HZ  = 10
+DUMMY_NAV       = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
+PRINT_HZ        = 10
+JOYSTICK_DEADZONE = 0.15  # matches streamer_config.yaml
 
 
 class _MockNav:
@@ -41,6 +38,14 @@ class _MockNav:
         return self._vel_cmd
 
 
+def _joystick_active(reader: PicoVRReader) -> bool:
+    ctrl = reader.controller
+    if ctrl is None:
+        return False
+    lx, ly = ctrl.left_joystick
+    return math.hypot(lx, ly) > JOYSTICK_DEADZONE
+
+
 def _fmt(cmd: PlannerCommand) -> str:
     return (
         f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
@@ -50,23 +55,73 @@ def _fmt(cmd: PlannerCommand) -> str:
     )
 
 
-def _run_step(
-    streamer: PlannerStreamer,
-    mock_nav: _MockNav,
-    nav_vel: Optional[NavVelCmd],
-    label: str,
-    duration: float,
-) -> None:
-    mock_nav._vel_cmd = nav_vel
-    print(f"\n{label}")
-    deadline = time.monotonic() + duration
-    while time.monotonic() < deadline:
+# ------------------------------------------------------------------
+# Steps
+# ------------------------------------------------------------------
+
+def test_connection(reader: PicoVRReader) -> bool:
+    print("[0] Waiting for VR headset ... ", end="", flush=True)
+    while True:
+        if reader.connected:
+            print(PASS)
+            return True
+        time.sleep(0.2)
+
+
+def test_idle(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = None
+    print("[1] Idle (no joystick, no nav) ... ", end="", flush=True)
+    while True:
+        cmd = streamer.command
+        if cmd is not None:
+            print(PASS)
+            print(f"  {_fmt(cmd)}")
+            return True
+        time.sleep(1.0 / PRINT_HZ)
+
+
+def test_controller(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = None
+    print("[2] Controller — move left joystick")
+    while True:
         cmd = streamer.command
         if cmd is not None:
             print(f"\r  {_fmt(cmd)}", end="", flush=True)
+            if _joystick_active(reader):
+                print(f"\n  {PASS}")
+                return True
         time.sleep(1.0 / PRINT_HZ)
-    print()
 
+
+def test_nav_only(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = DUMMY_NAV
+    print("[3] Nav only — release joystick")
+    while True:
+        cmd = streamer.command
+        if cmd is not None:
+            print(f"\r  {_fmt(cmd)}", end="", flush=True)
+            if not _joystick_active(reader):
+                print(f"\n  {PASS}")
+                return True
+        time.sleep(1.0 / PRINT_HZ)
+
+
+def test_nav_ctrl(streamer: PlannerStreamer, reader: PicoVRReader, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = DUMMY_NAV
+    print("[4] Nav + ctrl — move joystick to override nav")
+    while True:
+        cmd = streamer.command
+        if cmd is not None:
+            print(f"\r  {_fmt(cmd)}", end="", flush=True)
+            if _joystick_active(reader):
+                print(f"\n  {PASS}")
+                return True
+        time.sleep(1.0 / PRINT_HZ)
+
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
 
 def main() -> None:
     mock_nav = _MockNav()
@@ -82,17 +137,27 @@ def main() -> None:
         manager.start()
         streamer.start()
 
-        print("Waiting for VR headset ... ", end="", flush=True)
-        while not reader.connected:
-            time.sleep(0.2)
-        print(PASS)
+        steps = [
+            ("Connection",  lambda: test_connection(reader)),
+            ("Idle",        lambda: test_idle(streamer, reader, mock_nav)),
+            ("Controller",  lambda: test_controller(streamer, reader, mock_nav)),
+            ("Nav only",    lambda: test_nav_only(streamer, reader, mock_nav)),
+            ("Nav + ctrl",  lambda: test_nav_ctrl(streamer, reader, mock_nav)),
+        ]
 
-        _run_step(streamer, mock_nav, None,       "[1] Idle       (no joystick, no nav)     5s",  5.0)
-        _run_step(streamer, mock_nav, None,       "[2] Controller (move joystick)           10s", 10.0)
-        _run_step(streamer, mock_nav, DUMMY_NAV,  "[3] Nav only   (dummy nav, idle stick)   10s", 10.0)
-        _run_step(streamer, mock_nav, DUMMY_NAV,  "[4] Nav + ctrl (dummy nav + joystick)    10s", 10.0)
+        results = {}
+        for name, fn in steps:
+            ok = fn()
+            results[name] = ok
+            if not ok:
+                print(f"\nStopped at: {name}")
+                break
 
-        print("\nDone.")
+        print("\n--- Results ---")
+        for name, ok in results.items():
+            print(f"  {PASS if ok else FAIL}  {name}")
+        passed = sum(results.values())
+        print(f"\n{passed}/{len(results)} passed")
 
     except KeyboardInterrupt:
         pass
