@@ -11,6 +11,7 @@ import numpy as np
 import yaml
 
 from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
+from src.providers.singleton import singleton
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class _YawAccumulator:
         return np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
 
 
+@singleton
 class PlannerStreamer:
 
     depends_on = [PicoVRReader]
