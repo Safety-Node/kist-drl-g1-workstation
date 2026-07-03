@@ -137,6 +137,8 @@ class PlannerStreamer:
         while not self._stop_event.is_set():
             pico_vr_controller = pico_vr_reader.controller
             nav_vel_cmd        = nav_provider.vel_cmd
+            if pico_vr_controller is not None:
+                self._update_mode(pico_vr_controller)
             mode = self._input_mode(pico_vr_controller, nav_vel_cmd)
             if mode == -1:
                 cmd = self._compute_default()
@@ -178,7 +180,6 @@ class PlannerStreamer:
         rx, _  = pico_vr_controller.right_joystick
         dt = self._config["dt"]
 
-        self._update_mode(pico_vr_controller)
         self._yaw += rx * self._config["yaw_speed"] * dt
         facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
 
