@@ -1,9 +1,18 @@
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
-from src.providers.gearsonic.planner.types import PlannerCommand
 from src.providers.pico_vr.reader import PicoVRController
+
+
+@dataclass
+class PlannerCommand:
+    mode: int
+    target_vel: float
+    movement_direction: np.ndarray  # (3,) float32 unit vector
+    facing_direction: np.ndarray    # (3,) float32 unit vector
+    random_seed: int
 
 _JOYSTICK_DEADZONE = 0.1
 _YAW_SPEED = 1.5  # rad/s at rx=1.0
