@@ -3,3 +3,8 @@
 planner:
   default_height: 0.787           # G1 root (pelvis) height at standing pose (m)
   allowed_pred_num_tokens: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+  mujoco_to_isaaclab: [
+     0,  6, 12,  1,  7, 13,  2,  8, 14,
+     3,  9, 15, 22,  4, 10, 16, 23,  5,
+    11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28,
+  ]
