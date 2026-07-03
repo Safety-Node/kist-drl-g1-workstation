@@ -155,6 +155,9 @@ class ControllerCommandBuilder:
         self._prev_xy = xy_now
 
     def compute(self, ctrl: PicoVRController) -> PlannerCommand:
+        if self._mode == LocomotionMode.IDLE:
+            return self.default()
+
         lx, ly = ctrl.left_joystick
         rx, _  = ctrl.right_joystick
 
@@ -173,18 +176,9 @@ class ControllerCommandBuilder:
             movement_xy = np.stack([perp, facing], axis=1) @ movement_local
             movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
 
-        if self._mode == LocomotionMode.SLOW_WALK:
-            target_vel = 0.1 + 0.5 * mag
-        elif self._mode == LocomotionMode.WALK:
-            target_vel = -1.0
-        elif self._mode == LocomotionMode.RUN:
-            target_vel = 1.5 + 3.0 * mag
-        else:
-            target_vel = mag
-
         return PlannerCommand(
             mode=self._mode,
-            target_vel=float(target_vel),
+            target_vel=-1.0,
             movement_direction=movement_direction,
             facing_direction=np.array([facing[0], facing[1], 0.0], dtype=np.float32),
             random_seed=0,
