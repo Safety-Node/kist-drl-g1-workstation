@@ -15,6 +15,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
+from src.boot_manager.service_manager import ServiceManager
 from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
 
 BUTTON_TIMEOUT_S = 10.0
@@ -141,8 +142,10 @@ def test_right_controller(reader: PicoVRReader) -> bool:
 
 def main():
     reader = PicoVRReader()
+    manager = ServiceManager()
+    manager.register(reader)
     try:
-        reader.start()
+        manager.start()
 
         steps = [
             ("Connection",       lambda: test_connection(reader)),
@@ -173,7 +176,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        reader.stop()
+        manager.stop()
 
 
 if __name__ == "__main__":
