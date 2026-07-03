@@ -89,7 +89,6 @@ class PlannerStreamer:
         self._latest_command: Optional[PlannerCommand] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self.ready_event = threading.Event()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,8 +139,6 @@ class PlannerStreamer:
             cmd = self._compute(controller)
             with self._lock:
                 self._latest_command = cmd
-                if not self.ready_event.is_set():
-                    self.ready_event.set()
 
     def _compute(self, controller: PicoVRController) -> PlannerCommand:
         # --- mode switching (rising edge) ---
