@@ -60,10 +60,9 @@ class PicoVRController:
 
 @singleton
 class PicoVRReader:
-    """
-    PICO body tracking and controller input reader.
+    """PICO body tracking and controller input reader."""
 
-    """
+    depends_on = []
 
     def __init__(self):
         self._config = _load_config()
