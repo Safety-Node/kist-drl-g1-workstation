@@ -11,7 +11,7 @@ import math
 import os
 import sys
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../.."))
 
@@ -21,19 +21,11 @@ from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerComma
 
 PASS     = "\033[92mPASS\033[0m"
 FAIL     = "\033[91mFAIL\033[0m"
-DEADZONE = 0.15  # matches streamer_config.yaml
+DEADZONE = 0.15
 PRINT_HZ = 10
 
 
-def _joystick_active(ctrl: Optional[PicoVRController]) -> bool:
-    if ctrl is None:
-        return False
-    lx, ly = ctrl.left_joystick
-    rx, _  = ctrl.right_joystick
-    return math.hypot(lx, ly) > DEADZONE or abs(rx) > DEADZONE
-
-
-def _fmt(cmd: PlannerCommand) -> str:
+def _fmt_cmd(cmd: PlannerCommand) -> str:
     return (
         f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
         f"vel={cmd.target_vel:6.3f}  "
@@ -42,11 +34,21 @@ def _fmt(cmd: PlannerCommand) -> str:
     )
 
 
+def _fmt_left(ctrl: PicoVRController) -> str:
+    lx, ly = ctrl.left_joystick
+    return f"left=({lx:+.3f}, {ly:+.3f})"
+
+
+def _fmt_right(ctrl: PicoVRController) -> str:
+    rx, ry = ctrl.right_joystick
+    return f"right=({rx:+.3f}, {ry:+.3f})"
+
+
 # ------------------------------------------------------------------
-# Steps
+# Helpers
 # ------------------------------------------------------------------
 
-def test_connection(reader: PicoVRReader) -> bool:
+def _wait_connection(reader: PicoVRReader) -> bool:
     print("[0] Waiting for VR headset ... ", end="", flush=True)
     while True:
         if reader.connected:
@@ -55,41 +57,93 @@ def test_connection(reader: PicoVRReader) -> bool:
         time.sleep(0.2)
 
 
-def test_idle(reader: PicoVRReader) -> bool:
-    print("[1] Idle (no joystick) ... ", end="", flush=True)
+def _wait_neutral(reader: PicoVRReader) -> None:
+    print("      Return to neutral ... ", end="", flush=True)
     while True:
-        if not _joystick_active(reader.controller):
-            print(PASS)
+        ctrl = reader.controller
+        if ctrl is not None:
+            lx, ly = ctrl.left_joystick
+            rx, _  = ctrl.right_joystick
+            if math.hypot(lx, ly) < DEADZONE and abs(rx) < DEADZONE:
+                print(PASS)
+                return
+        time.sleep(0.05)
+
+
+def _check_direction(
+    reader:    PicoVRReader,
+    streamer:  PlannerStreamer,
+    label:     str,
+    condition: Callable[[PicoVRController], bool],
+    fmt_val:   Callable[[PicoVRController], str],
+) -> bool:
+    print(f"      {label} ... ", end="", flush=True)
+    while True:
+        ctrl = reader.controller
+        if ctrl is not None and condition(ctrl):
+            cmd = streamer.command
+            val = fmt_val(ctrl)
+            cmd_str = f"  →  {_fmt_cmd(cmd)}" if cmd is not None else ""
+            print(f"{PASS}  {val}{cmd_str}")
+            _wait_neutral(reader)
             return True
         time.sleep(0.05)
 
 
-def test_controller(reader: PicoVRReader) -> bool:
-    print("[2] Controller — move joystick ... ", end="", flush=True)
-    while True:
-        if _joystick_active(reader.controller):
-            print(PASS)
-            return True
-        time.sleep(0.05)
+# ------------------------------------------------------------------
+# Steps
+# ------------------------------------------------------------------
 
+def test_mode(reader: PicoVRReader, streamer: PlannerStreamer) -> bool:
+    print("[1] Mode test")
 
-def test_mode_up(streamer: PlannerStreamer) -> bool:
-    print("[3] Mode up — press A+B ... ", end="", flush=True)
+    print("      Press A+B (mode up) ... ", end="", flush=True)
     while True:
         cmd = streamer.command
         if cmd is not None and cmd.mode == LocomotionMode.SLOW_WALK:
             print(PASS)
-            return True
+            break
         time.sleep(0.05)
 
-
-def test_mode_down(streamer: PlannerStreamer) -> bool:
-    print("[4] Mode down — press X+Y ... ", end="", flush=True)
+    print("      Press X+Y (mode down) ... ", end="", flush=True)
     while True:
         cmd = streamer.command
         if cmd is not None and cmd.mode == LocomotionMode.IDLE:
             print(PASS)
             return True
+        time.sleep(0.05)
+
+
+def test_left_joystick(reader: PicoVRReader, streamer: PlannerStreamer) -> bool:
+    print("[2] Left joystick")
+    directions = [
+        ("East  (right)",    lambda c: c.left_joystick[0] >  DEADZONE, _fmt_left),
+        ("West  (left) ",    lambda c: c.left_joystick[0] < -DEADZONE, _fmt_left),
+        ("North (forward)",  lambda c: c.left_joystick[1] >  DEADZONE, _fmt_left),
+        ("South (backward)", lambda c: c.left_joystick[1] < -DEADZONE, _fmt_left),
+    ]
+    return all(_check_direction(reader, streamer, label, cond, fmt) for label, cond, fmt in directions)
+
+
+def test_right_joystick(reader: PicoVRReader, streamer: PlannerStreamer) -> bool:
+    print("[3] Right joystick")
+    directions = [
+        ("East  (right)", lambda c: c.right_joystick[0] >  DEADZONE, _fmt_right),
+        ("West  (left) ", lambda c: c.right_joystick[0] < -DEADZONE, _fmt_right),
+    ]
+    return all(_check_direction(reader, streamer, label, cond, fmt) for label, cond, fmt in directions)
+
+
+def test_neutral(reader: PicoVRReader) -> bool:
+    print("[4] All to neutral ... ", end="", flush=True)
+    while True:
+        ctrl = reader.controller
+        if ctrl is not None:
+            lx, ly = ctrl.left_joystick
+            rx, _  = ctrl.right_joystick
+            if math.hypot(lx, ly) < DEADZONE and abs(rx) < DEADZONE:
+                print(PASS)
+                return True
         time.sleep(0.05)
 
 
@@ -109,11 +163,11 @@ def main() -> None:
         streamer.start()
 
         steps = [
-            ("Connection",  lambda: test_connection(reader)),
-            ("Idle",        lambda: test_idle(reader)),
-            ("Controller",  lambda: test_controller(reader)),
-            ("Mode up",     lambda: test_mode_up(streamer)),
-            ("Mode down",   lambda: test_mode_down(streamer)),
+            ("Connection",     lambda: _wait_connection(reader)),
+            ("Mode",           lambda: test_mode(reader, streamer)),
+            ("Left joystick",  lambda: test_left_joystick(reader, streamer)),
+            ("Right joystick", lambda: test_right_joystick(reader, streamer)),
+            ("Neutral",        lambda: test_neutral(reader)),
         ]
 
         results = {}
@@ -135,7 +189,7 @@ def main() -> None:
             while True:
                 cmd = streamer.command
                 if cmd is not None:
-                    print(f"\r  {_fmt(cmd)}", end="", flush=True)
+                    print(f"\r  {_fmt_cmd(cmd)}", end="", flush=True)
                 time.sleep(1.0 / PRINT_HZ)
 
     except KeyboardInterrupt:
