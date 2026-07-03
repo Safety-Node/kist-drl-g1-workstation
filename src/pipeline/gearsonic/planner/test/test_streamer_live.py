@@ -111,7 +111,7 @@ def test_mode(reader: PicoVRReader, streamer: PlannerStreamer) -> bool:
         time.sleep(0.05)
 
     prev_mode = streamer.command.mode
-    print(f"      Press X+Y (mode down, current={LocomotionMode(prev_mode).name}) ... ", end="", flush=True)
+    print(f"      Press X+Y (mode down) ... ", end="", flush=True)
     while True:
         cmd = streamer.command
         if cmd is not None:
