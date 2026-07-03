@@ -97,19 +97,24 @@ def _check_direction(
 def test_mode(reader: PicoVRReader, streamer: PlannerStreamer) -> bool:
     print("[1] Mode test")
 
-    print("      Press A+B (mode up) ... ", end="", flush=True)
+    while streamer.command is None:
+        time.sleep(0.05)
+    before = streamer.command.mode
+
+    print(f"      Press A+B (mode up, current={LocomotionMode(before).name}) ... ", end="", flush=True)
     while True:
         cmd = streamer.command
-        if cmd is not None and cmd.mode == LocomotionMode.SLOW_WALK:
-            print(PASS)
+        if cmd is not None and cmd.mode == before + 1:
+            print(f"{PASS}  → {LocomotionMode(cmd.mode).name}")
+            after_up = cmd.mode
             break
         time.sleep(0.05)
 
-    print("      Press X+Y (mode down) ... ", end="", flush=True)
+    print(f"      Press X+Y (mode down, current={LocomotionMode(after_up).name}) ... ", end="", flush=True)
     while True:
         cmd = streamer.command
-        if cmd is not None and cmd.mode == LocomotionMode.IDLE:
-            print(PASS)
+        if cmd is not None and cmd.mode == after_up - 1:
+            print(f"{PASS}  → {LocomotionMode(cmd.mode).name}")
             return True
         time.sleep(0.05)
 
