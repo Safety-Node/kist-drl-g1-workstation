@@ -59,6 +59,82 @@ class LocomotionMode(IntEnum):
     INJURED_WALK        = 19
 
 
+class ControllerCommandBuilder:
+    """Converts PicoVR controller input → PlannerCommand."""
+
+    def __init__(self, config: dict):
+        self._deadzone  = config["joystick_deadzone"]
+        self._yaw_speed = config["yaw_speed"]
+        self._dt        = config["dt"]
+
+        self._mode    = LocomotionMode.IDLE
+        self._yaw     = 0.0
+        self._prev_ab = False
+        self._prev_xy = False
+
+    def is_active(self, ctrl: PicoVRController) -> bool:
+        lx, ly = ctrl.left_joystick
+        rx, _  = ctrl.right_joystick
+        return math.hypot(lx, ly) > self._deadzone or abs(rx) > self._deadzone
+
+    def update_mode(self, ctrl: PicoVRController) -> None:
+        ab_now = ctrl.btn_a and ctrl.btn_b
+        xy_now = ctrl.btn_x and ctrl.btn_y
+        if ab_now and not self._prev_ab:
+            self._mode = LocomotionMode(min(LocomotionMode.RUN, self._mode + 1))
+        if xy_now and not self._prev_xy:
+            self._mode = LocomotionMode(max(LocomotionMode.IDLE, self._mode - 1))
+        self._prev_ab = ab_now
+        self._prev_xy = xy_now
+
+    def compute(self, ctrl: PicoVRController) -> PlannerCommand:
+        lx, ly = ctrl.left_joystick
+        rx, _  = ctrl.right_joystick
+
+        self._yaw += rx * self._yaw_speed * self._dt
+        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
+
+        raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
+        if raw_mag < 1e-6:
+            movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+            mag = 0.0
+        else:
+            mag   = (raw_mag - self._deadzone) / (1.0 - self._deadzone)
+            scale = mag / raw_mag
+            movement_local = np.array([-lx, ly], dtype=np.float32) * scale
+            perp = np.array([-facing[1], facing[0]], dtype=np.float32)
+            movement_xy = np.stack([perp, facing], axis=1) @ movement_local
+            movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
+
+        if self._mode == LocomotionMode.SLOW_WALK:
+            target_vel = 0.1 + 0.5 * mag
+        elif self._mode == LocomotionMode.WALK:
+            target_vel = -1.0
+        elif self._mode == LocomotionMode.RUN:
+            target_vel = 1.5 + 3.0 * mag
+        else:
+            target_vel = mag
+
+        return PlannerCommand(
+            mode=self._mode,
+            target_vel=float(target_vel),
+            movement_direction=movement_direction,
+            facing_direction=np.array([facing[0], facing[1], 0.0], dtype=np.float32),
+            random_seed=0,
+        )
+
+    def default(self) -> PlannerCommand:
+        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
+        direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+        return PlannerCommand(
+            mode=self._mode,
+            target_vel=-1.0,
+            movement_direction=direction,
+            facing_direction=direction,
+            random_seed=0,
+        )
+
+
 @singleton
 class PlannerStreamer:
 
@@ -71,11 +147,6 @@ class PlannerStreamer:
         self._latest_command: Optional[PlannerCommand] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
-
-        self._mode = LocomotionMode.IDLE
-        self._yaw: float = 0.0
-        self._prev_ab = False
-        self._prev_xy = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -117,81 +188,15 @@ class PlannerStreamer:
 
     def _run(self) -> None:
         pico_vr_reader = PicoVRReader()
-        deadzone = self._config["joystick_deadzone"]
+        ctrl_builder   = ControllerCommandBuilder(self._config)
 
         while not self._stop_event.is_set():
             ctrl = pico_vr_reader.controller
             if ctrl is not None:
-                self._update_mode(ctrl)
-                lx, ly = ctrl.left_joystick
-                rx, _  = ctrl.right_joystick
-                active = math.hypot(lx, ly) > deadzone or abs(rx) > deadzone
+                ctrl_builder.update_mode(ctrl)
+                cmd = ctrl_builder.compute(ctrl) if ctrl_builder.is_active(ctrl) else ctrl_builder.default()
             else:
-                active = False
-
-            if active:
-                cmd = self._compute_from_controller(ctrl)
-            else:
-                cmd = self._compute_default()
+                cmd = ctrl_builder.default()
             with self._lock:
                 self._latest_command = cmd
             time.sleep(self._config["dt"])
-
-    def _update_mode(self, controller: PicoVRController) -> None:
-        ab_now = controller.btn_a and controller.btn_b
-        xy_now = controller.btn_x and controller.btn_y
-        if ab_now and not self._prev_ab:
-            self._mode = LocomotionMode(min(LocomotionMode.RUN, self._mode + 1))
-        if xy_now and not self._prev_xy:
-            self._mode = LocomotionMode(max(LocomotionMode.IDLE, self._mode - 1))
-        self._prev_ab = ab_now
-        self._prev_xy = xy_now
-
-    def _compute_from_controller(self, pico_vr_controller: PicoVRController) -> PlannerCommand:
-        lx, ly = pico_vr_controller.left_joystick
-        rx, _  = pico_vr_controller.right_joystick
-        dt = self._config["dt"]
-
-        self._yaw += rx * self._config["yaw_speed"] * dt
-        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
-
-        raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
-        if raw_mag < 1e-6:
-            # pure rotation — no translation
-            movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
-            mag = 0.0
-        else:
-            mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
-            scale = mag / raw_mag
-            movement_local = np.array([-lx, ly], dtype=np.float32) * scale
-            perp = np.array([-facing[1], facing[0]], dtype=np.float32)
-            movement_xy = np.stack([perp, facing], axis=1) @ movement_local
-            movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
-
-        if self._mode == LocomotionMode.SLOW_WALK:
-            target_vel = 0.1 + 0.5 * mag
-        elif self._mode == LocomotionMode.WALK:
-            target_vel = -1.0
-        elif self._mode == LocomotionMode.RUN:
-            target_vel = 1.5 + 3.0 * mag
-        else:
-            target_vel = mag
-
-        return PlannerCommand(
-            mode=self._mode,
-            target_vel=float(target_vel),
-            movement_direction=movement_direction,
-            facing_direction=np.array([facing[0], facing[1], 0.0], dtype=np.float32),
-            random_seed=0,
-        )
-
-    def _compute_default(self) -> PlannerCommand:
-        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
-        direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
-        return PlannerCommand(
-            mode=self._mode,
-            target_vel=-1.0,
-            movement_direction=direction,
-            facing_direction=direction,
-            random_seed=0,
-        )
