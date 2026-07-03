@@ -100,6 +100,28 @@ def test_nav_ctrl(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
         time.sleep(0.05)
 
 
+def test_mode_up(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = None
+    print("[5] Mode up — hold joystick + press A+B ... ", end="", flush=True)
+    while True:
+        cmd = streamer.command
+        if cmd is not None and streamer.input_mode == 1 and cmd.mode == LocomotionMode.SLOW_WALK:
+            print(PASS)
+            return True
+        time.sleep(0.05)
+
+
+def test_mode_down(streamer: PlannerStreamer, mock_nav: _MockNav) -> bool:
+    mock_nav._vel_cmd = None
+    print("[6] Mode down — hold joystick + press X+Y ... ", end="", flush=True)
+    while True:
+        cmd = streamer.command
+        if cmd is not None and streamer.input_mode == 1 and cmd.mode == LocomotionMode.IDLE:
+            print(PASS)
+            return True
+        time.sleep(0.05)
+
+
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
@@ -124,6 +146,8 @@ def main() -> None:
             ("Controller",  lambda: test_controller(streamer, mock_nav)),
             ("Nav only",    lambda: test_nav_only(streamer, mock_nav)),
             ("Nav + ctrl",  lambda: test_nav_ctrl(streamer, mock_nav)),
+            ("Mode up",     lambda: test_mode_up(streamer, mock_nav)),
+            ("Mode down",   lambda: test_mode_down(streamer, mock_nav)),
         ]
 
         results = {}
