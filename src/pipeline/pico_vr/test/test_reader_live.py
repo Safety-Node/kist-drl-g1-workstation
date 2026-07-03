@@ -16,7 +16,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from src.boot_manager.service_manager import ServiceManager
-from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
+from src.pipeline.pico_vr.reader import PicoVRController, PicoVRReader
 
 BUTTON_TIMEOUT_S = 10.0
 

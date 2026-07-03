@@ -10,7 +10,7 @@ import numpy as np
 import xrobotoolkit_sdk as xrt
 import yaml
 
-from ..singleton import singleton
+from src.providers.singleton import singleton
 
 logger = logging.getLogger(__name__)
 
