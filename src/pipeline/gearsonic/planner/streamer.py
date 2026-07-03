@@ -117,15 +117,35 @@ class PlannerStreamer:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
-        reader = PicoVRReader()
+        pico_vr_reader = PicoVRReader()
+        nav_provider = NavigationProvider()
+        
         while not self._stop_event.is_set():
-            cmd = self._compute(reader.controller)
+            pico_vr_controller = pico_vr_reader.controller
+            nav_vel_cmd        = nav_provider.vel_cmd
+            mode = self._input_mode(pico_vr_controller, nav_vel_cmd)
+            if mode == -1:
+                cmd = self._compute_default()
+                with self._lock:
+                    self._latest_command = cmd
+                time.sleep(0.002)
+                continue
+            elif mode == 1:
+                cmd = self._compute_from_controller(pico_vr_controller)
+            else:
+                cmd = self._compute_from_nav(nav_vel_cmd)
             with self._lock:
                 self._latest_command = cmd
             time.sleep(self._config["dt"])
 
-    def _joystick_active(self, mag: float) -> bool:
-        return mag > self._config["joystick_deadzone"]
+    def _input_mode(self, pico_vr_controller: Optional[PicoVRController], nav_vel_cmd: Optional[NavVelCmd]) -> int:
+        if pico_vr_controller is not None:
+            lx, ly = pico_vr_controller.left_joystick
+            if math.hypot(lx, ly) > self._config["joystick_deadzone"]:
+                return 1
+        if nav_vel_cmd is not None:
+            return 0
+        return -1
 
     def _update_mode(self, controller: PicoVRController) -> None:
         ab_now = controller.btn_a and controller.btn_b
@@ -137,66 +157,31 @@ class PlannerStreamer:
         self._prev_ab = ab_now
         self._prev_xy = xy_now
 
-    def _compute(self, controller: Optional[PicoVRController]) -> PlannerCommand:
-        lx = ly = rx = 0.0
-        if controller is not None:
-            lx, ly = controller.left_joystick
-            rx, _  = controller.right_joystick
-
+    def _compute_from_controller(self, pico_vr_controller: PicoVRController) -> PlannerCommand:
+        lx, ly = pico_vr_controller.left_joystick
+        rx, _  = pico_vr_controller.right_joystick
         dt = self._config["dt"]
-        joystick_mag = math.hypot(lx, ly)
-        joystick_active = self._joystick_active(joystick_mag)
 
-        nav_state = None
-        nav_vyaw = 0.0
-        if not joystick_active:
-            nav_state = NavigationProvider().get_state()
-            if nav_state.mode == "NAVIGATING":
-                nav_vyaw = nav_state.vel.vyaw
-
-        self._yaw += (rx * self._config["yaw_speed"] + nav_vyaw) * dt
+        self._update_mode(pico_vr_controller)
+        self._yaw += rx * self._config["yaw_speed"] * dt
         facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
 
-        if joystick_active:
-            # --- controller mode (interrupts nav) ---
-            self._update_mode(controller)
-            raw_mag = float(np.clip(joystick_mag, 0.0, 1.0))
-            mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
-            mode_to_send = self._mode
-            if self._mode == LocomotionMode.SLOW_WALK:
-                target_vel = 0.1 + 0.5 * mag
-            elif self._mode == LocomotionMode.WALK:
-                target_vel = -1.0
-            elif self._mode == LocomotionMode.RUN:
-                target_vel = 1.5 + 3.0 * mag
-            else:
-                target_vel = mag
-            scale = mag / raw_mag
-            movement_local = np.array([-lx, ly], dtype=np.float32) * scale
-            perp = np.array([-facing[1], facing[0]], dtype=np.float32)
-            movement_xy = np.stack([perp, facing], axis=1) @ movement_local
-            movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
-
-        elif nav_state.mode == "NAVIGATING":
-            # --- nav mode ---
-            nav: NavVelCmd = nav_state.vel
-            vx, vy = nav.vx, nav.vy
-            speed = float(math.hypot(vx, vy))
-            if speed < 1e-3:
-                movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
-                target_vel = -1.0
-                mode_to_send = LocomotionMode.IDLE
-            else:
-                movement_direction = np.array([vx / speed, vy / speed, 0.0], dtype=np.float32)
-                target_vel = speed
-                mode_to_send = self._mode
-
-        else:
-            # --- idle ---
-            movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+        raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
+        mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
+        mode_to_send = self._mode
+        if self._mode == LocomotionMode.SLOW_WALK:
+            target_vel = 0.1 + 0.5 * mag
+        elif self._mode == LocomotionMode.WALK:
             target_vel = -1.0
-            mode_to_send = LocomotionMode.IDLE
-
+        elif self._mode == LocomotionMode.RUN:
+            target_vel = 1.5 + 3.0 * mag
+        else:
+            target_vel = mag
+        scale = mag / raw_mag
+        movement_local = np.array([-lx, ly], dtype=np.float32) * scale
+        perp = np.array([-facing[1], facing[0]], dtype=np.float32)
+        movement_xy = np.stack([perp, facing], axis=1) @ movement_local
+        movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
         facing_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
 
         return PlannerCommand(
@@ -204,5 +189,42 @@ class PlannerStreamer:
             target_vel=float(target_vel),
             movement_direction=movement_direction,
             facing_direction=facing_direction,
+            random_seed=0,
+        )
+
+    def _compute_from_nav(self, nav_vel_cmd: NavVelCmd) -> PlannerCommand:
+        dt = self._config["dt"]
+
+        self._yaw += nav_vel_cmd.vyaw * dt
+        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
+
+        vx, vy = nav_vel_cmd.vx, nav_vel_cmd.vy
+        speed = float(math.hypot(vx, vy))
+        if speed < 1e-3:
+            movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+            target_vel = -1.0
+            mode_to_send = LocomotionMode.IDLE
+        else:
+            movement_direction = np.array([vx / speed, vy / speed, 0.0], dtype=np.float32)
+            target_vel = speed
+            mode_to_send = self._mode
+        facing_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+
+        return PlannerCommand(
+            mode=mode_to_send,
+            target_vel=float(target_vel),
+            movement_direction=movement_direction,
+            facing_direction=facing_direction,
+            random_seed=0,
+        )
+
+    def _compute_default(self) -> PlannerCommand:
+        facing = np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
+        direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+        return PlannerCommand(
+            mode=self._mode,
+            target_vel=-1.0,
+            movement_direction=direction,
+            facing_direction=direction,
             random_seed=0,
         )

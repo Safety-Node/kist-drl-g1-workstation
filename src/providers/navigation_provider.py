@@ -266,6 +266,11 @@ class NavigationProvider:
         with self._state_lock:
             return self._latest_state
 
+    @property
+    def vel_cmd(self) -> Optional[NavVelCmd]:
+        state = self.get_state()
+        return state.vel if state.mode == "NAVIGATING" else None
+
     # ------------------------------------------------------------------
     # Internal: worker loop
     # ------------------------------------------------------------------
