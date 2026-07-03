@@ -1,5 +1,4 @@
 import logging
-import os
 import subprocess
 import threading
 import time
@@ -90,23 +89,8 @@ class PicoVRReader:
         if self._thread is not None and self._thread.is_alive():
             return
 
-        subprocess.Popen(
-            ["bash", self._config["service_script"]],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        with open(os.devnull, "w") as devnull:
-            fd_out, fd_err = os.dup(1), os.dup(2)
-            os.dup2(devnull.fileno(), 1)
-            os.dup2(devnull.fileno(), 2)
-            try:
-                xrt.init()
-                time.sleep(1.0)
-            finally:
-                os.dup2(fd_out, 1)
-                os.dup2(fd_err, 2)
-                os.close(fd_out)
-                os.close(fd_err)
+        subprocess.Popen(["bash", self._config["service_script"]])
+        xrt.init()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
