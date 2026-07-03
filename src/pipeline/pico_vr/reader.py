@@ -1,4 +1,6 @@
+import contextlib
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -15,6 +17,20 @@ from src.providers.singleton import singleton
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent / "reader_config.yaml"
+
+
+@contextlib.contextmanager
+def _silence():
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved_out, saved_err = os.dup(1), os.dup(2)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    try:
+        yield
+    finally:
+        os.dup2(saved_out, 1); os.close(saved_out)
+        os.dup2(saved_err, 2); os.close(saved_err)
 
 
 def _load_config() -> dict:
@@ -89,8 +105,13 @@ class PicoVRReader:
         if self._thread is not None and self._thread.is_alive():
             return
 
-        subprocess.Popen(["bash", self._config["service_script"]])
-        xrt.init()
+        subprocess.Popen(
+            ["bash", self._config["service_script"]],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with _silence():
+            xrt.init()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -109,7 +130,8 @@ class PicoVRReader:
                 logger.warning("PicoVRReader: thread did not stop within 2s")
         self._thread = None
         try:
-            xrt.close()
+            with _silence():
+                xrt.close()
         except Exception:
             pass
         with self._lock:
