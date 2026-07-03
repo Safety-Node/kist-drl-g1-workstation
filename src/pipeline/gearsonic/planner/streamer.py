@@ -59,6 +59,73 @@ class LocomotionMode(IntEnum):
     INJURED_WALK        = 19
 
 
+@singleton
+class PlannerStreamer:
+
+    depends_on = [PicoVRReader]
+
+    def __init__(self):
+        self._config = _load_config()
+
+        self._lock = threading.Lock()
+        self._latest_command: Optional[PlannerCommand] = None
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="planner_streamer",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info("PlannerStreamer started")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                logger.warning("PlannerStreamer: thread did not stop within 2s")
+        self._thread = None
+        logger.info("PlannerStreamer stopped")
+
+    # ------------------------------------------------------------------
+    # Data access
+    # ------------------------------------------------------------------
+
+    @property
+    def command(self) -> Optional[PlannerCommand]:
+        with self._lock:
+            return self._latest_command
+
+    # ------------------------------------------------------------------
+    # Background polling
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        pico_vr_reader = PicoVRReader()
+        ctrl_builder   = ControllerCommandBuilder(self._config)
+
+        while not self._stop_event.is_set():
+            ctrl = pico_vr_reader.controller
+            if ctrl is not None:
+                ctrl_builder.update_mode(ctrl)
+                cmd = ctrl_builder.compute(ctrl) if ctrl_builder.is_active(ctrl) else ctrl_builder.default()
+            else:
+                cmd = ctrl_builder.default()
+            with self._lock:
+                self._latest_command = cmd
+            time.sleep(self._config["dt"])
+
+
 class ControllerCommandBuilder:
     """Converts PicoVR controller input → PlannerCommand."""
 
@@ -133,70 +200,3 @@ class ControllerCommandBuilder:
             facing_direction=direction,
             random_seed=0,
         )
-
-
-@singleton
-class PlannerStreamer:
-
-    depends_on = [PicoVRReader]
-
-    def __init__(self):
-        self._config = _load_config()
-
-        self._lock = threading.Lock()
-        self._latest_command: Optional[PlannerCommand] = None
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="planner_streamer",
-            daemon=True,
-        )
-        self._thread.start()
-        logger.info("PlannerStreamer started")
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-            if self._thread.is_alive():
-                logger.warning("PlannerStreamer: thread did not stop within 2s")
-        self._thread = None
-        logger.info("PlannerStreamer stopped")
-
-    # ------------------------------------------------------------------
-    # Data access
-    # ------------------------------------------------------------------
-
-    @property
-    def command(self) -> Optional[PlannerCommand]:
-        with self._lock:
-            return self._latest_command
-
-    # ------------------------------------------------------------------
-    # Background polling
-    # ------------------------------------------------------------------
-
-    def _run(self) -> None:
-        pico_vr_reader = PicoVRReader()
-        ctrl_builder   = ControllerCommandBuilder(self._config)
-
-        while not self._stop_event.is_set():
-            ctrl = pico_vr_reader.controller
-            if ctrl is not None:
-                ctrl_builder.update_mode(ctrl)
-                cmd = ctrl_builder.compute(ctrl) if ctrl_builder.is_active(ctrl) else ctrl_builder.default()
-            else:
-                cmd = ctrl_builder.default()
-            with self._lock:
-                self._latest_command = cmd
-            time.sleep(self._config["dt"])
