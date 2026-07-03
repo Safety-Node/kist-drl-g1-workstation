@@ -7,6 +7,7 @@ Run:
   uv run src/pipeline/gearsonic/planner/test/test_streamer_live.py
 """
 
+import math
 import os
 import sys
 import time
@@ -15,19 +16,25 @@ from typing import Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../.."))
 
 from src.boot_manager.service_manager import ServiceManager
-from src.pipeline.pico_vr.reader import PicoVRReader
+from src.pipeline.pico_vr.reader import PicoVRController, PicoVRReader
 from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerCommand, PlannerStreamer
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
+PASS     = "\033[92mPASS\033[0m"
+FAIL     = "\033[91mFAIL\033[0m"
+DEADZONE = 0.15  # matches streamer_config.yaml
 PRINT_HZ = 10
 
 
-def _fmt(cmd: PlannerCommand, mode: Optional[int]) -> str:
-    mode_str = f"{mode:+d}" if mode is not None else " ?"
+def _joystick_active(ctrl: Optional[PicoVRController]) -> bool:
+    if ctrl is None:
+        return False
+    lx, ly = ctrl.left_joystick
+    rx, _  = ctrl.right_joystick
+    return math.hypot(lx, ly) > DEADZONE or abs(rx) > DEADZONE
+
+
+def _fmt(cmd: PlannerCommand) -> str:
     return (
-        f"input={mode_str}  "
         f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
         f"vel={cmd.target_vel:6.3f}  "
         f"move=[{cmd.movement_direction[0]:6.3f}, {cmd.movement_direction[1]:6.3f}]  "
@@ -48,19 +55,19 @@ def test_connection(reader: PicoVRReader) -> bool:
         time.sleep(0.2)
 
 
-def test_idle(streamer: PlannerStreamer) -> bool:
+def test_idle(reader: PicoVRReader) -> bool:
     print("[1] Idle (no joystick) ... ", end="", flush=True)
     while True:
-        if streamer.input_mode == -1:
+        if not _joystick_active(reader.controller):
             print(PASS)
             return True
         time.sleep(0.05)
 
 
-def test_controller(streamer: PlannerStreamer) -> bool:
-    print("[2] Controller — move left joystick ... ", end="", flush=True)
+def test_controller(reader: PicoVRReader) -> bool:
+    print("[2] Controller — move joystick ... ", end="", flush=True)
     while True:
-        if streamer.input_mode == 1:
+        if _joystick_active(reader.controller):
             print(PASS)
             return True
         time.sleep(0.05)
@@ -103,8 +110,8 @@ def main() -> None:
 
         steps = [
             ("Connection",  lambda: test_connection(reader)),
-            ("Idle",        lambda: test_idle(streamer)),
-            ("Controller",  lambda: test_controller(streamer)),
+            ("Idle",        lambda: test_idle(reader)),
+            ("Controller",  lambda: test_controller(reader)),
             ("Mode up",     lambda: test_mode_up(streamer)),
             ("Mode down",   lambda: test_mode_down(streamer)),
         ]
@@ -126,10 +133,9 @@ def main() -> None:
         if passed == len(results):
             print("\nLive (Ctrl+C to exit)")
             while True:
-                cmd  = streamer.command
-                mode = streamer.input_mode
+                cmd = streamer.command
                 if cmd is not None:
-                    print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
+                    print(f"\r  {_fmt(cmd)}", end="", flush=True)
                 time.sleep(1.0 / PRINT_HZ)
 
     except KeyboardInterrupt:

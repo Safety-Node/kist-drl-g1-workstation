@@ -69,7 +69,6 @@ class PlannerStreamer:
 
         self._lock = threading.Lock()
         self._latest_command: Optional[PlannerCommand] = None
-        self._latest_input_mode: Optional[int] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -112,39 +111,31 @@ class PlannerStreamer:
         with self._lock:
             return self._latest_command
 
-    @property
-    def input_mode(self) -> Optional[int]:
-        with self._lock:
-            return self._latest_input_mode
-
     # ------------------------------------------------------------------
     # Background polling
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
         pico_vr_reader = PicoVRReader()
+        deadzone = self._config["joystick_deadzone"]
 
         while not self._stop_event.is_set():
-            pico_vr_controller = pico_vr_reader.controller
-            if pico_vr_controller is not None:
-                self._update_mode(pico_vr_controller)
-            mode = self._input_mode(pico_vr_controller)
-            if mode == 1:
-                cmd = self._compute_from_controller(pico_vr_controller)
+            ctrl = pico_vr_reader.controller
+            if ctrl is not None:
+                self._update_mode(ctrl)
+                lx, ly = ctrl.left_joystick
+                rx, _  = ctrl.right_joystick
+                active = math.hypot(lx, ly) > deadzone or abs(rx) > deadzone
+            else:
+                active = False
+
+            if active:
+                cmd = self._compute_from_controller(ctrl)
             else:
                 cmd = self._compute_default()
             with self._lock:
                 self._latest_command = cmd
-                self._latest_input_mode = mode
             time.sleep(self._config["dt"])
-
-    def _input_mode(self, pico_vr_controller: Optional[PicoVRController]) -> int:
-        if pico_vr_controller is not None:
-            lx, ly = pico_vr_controller.left_joystick
-            rx, _  = pico_vr_controller.right_joystick
-            if math.hypot(lx, ly) > self._config["joystick_deadzone"] or abs(rx) > self._config["joystick_deadzone"]:
-                return 1
-        return -1
 
     def _update_mode(self, controller: PicoVRController) -> None:
         ab_now = controller.btn_a and controller.btn_b
