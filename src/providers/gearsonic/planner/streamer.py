@@ -1,9 +1,33 @@
 import math
 from dataclasses import dataclass
+from enum import IntEnum
 
 import numpy as np
 
 from src.providers.pico_vr.reader import PicoVRController
+
+
+class LocomotionMode(IntEnum):
+    IDLE                = 0
+    SLOW_WALK           = 1
+    WALK                = 2
+    RUN                 = 3
+    IDLE_SQUAT          = 4
+    IDLE_KNEEL_TWO_LEGS = 5
+    IDLE_KNEEL          = 6
+    IDLE_LYING          = 7
+    IDLE_CRAWLING       = 8
+    IDLE_BOXING         = 9
+    WALK_BOXING         = 10
+    LEFT_PUNCH          = 11
+    RIGHT_PUNCH         = 12
+    RANDOM_PUNCH        = 13
+    ELBOW_CRAWLING      = 14
+    LEFT_HOOK           = 15
+    RIGHT_HOOK          = 16
+    FORWARD_JUMP        = 17
+    STEALTH_WALK        = 18
+    INJURED_WALK        = 19
 
 
 @dataclass
@@ -14,14 +38,9 @@ class PlannerCommand:
     facing_direction: np.ndarray    # (3,) float32 unit vector
     random_seed: int
 
-_JOYSTICK_DEADZONE = 0.1
-_YAW_SPEED = 1.5  # rad/s at rx=1.0
 
-_MODE_IDLE        = 0
-_MODE_SLOW_WALK   = 1
-_MODE_WALK        = 2
-_MODE_RUN         = 3
-_MODE_MAX         = 19
+_JOYSTICK_DEADZONE = 0.15
+_YAW_SPEED = 1.5  # rad/s at rx=1.0
 
 
 class _YawAccumulator:
@@ -43,14 +62,14 @@ class PlannerStreamer:
 
     def __init__(self, dt: float = 0.05):
         self._dt = dt
-        self._mode = _MODE_IDLE
+        self._mode = LocomotionMode.IDLE
         self._yaw = _YawAccumulator()
         self._prev_ab = False
         self._prev_xy = False
 
     def reset(self) -> None:
         self._yaw.reset()
-        self._mode = _MODE_IDLE
+        self._mode = LocomotionMode.IDLE
         self._prev_ab = False
         self._prev_xy = False
 
@@ -59,9 +78,9 @@ class PlannerStreamer:
         ab_now = controller.btn_a and controller.btn_b
         xy_now = controller.btn_x and controller.btn_y
         if ab_now and not self._prev_ab:
-            self._mode = min(_MODE_MAX, self._mode + 1)
+            self._mode = LocomotionMode(min(LocomotionMode.INJURED_WALK, self._mode + 1))
         if xy_now and not self._prev_xy:
-            self._mode = max(_MODE_IDLE, self._mode - 1)
+            self._mode = LocomotionMode(max(LocomotionMode.IDLE, self._mode - 1))
         self._prev_ab = ab_now
         self._prev_xy = xy_now
 
@@ -76,15 +95,15 @@ class PlannerStreamer:
         if raw_mag < _JOYSTICK_DEADZONE:
             mag = 0.0
             target_vel = -1.0
-            mode_to_send = _MODE_IDLE
+            mode_to_send = LocomotionMode.IDLE
         else:
             mag = (raw_mag - _JOYSTICK_DEADZONE) / (1.0 - _JOYSTICK_DEADZONE)
             mode_to_send = self._mode
-            if self._mode == _MODE_SLOW_WALK:
+            if self._mode == LocomotionMode.SLOW_WALK:
                 target_vel = 0.1 + 0.5 * mag
-            elif self._mode == _MODE_WALK:
+            elif self._mode == LocomotionMode.WALK:
                 target_vel = -1.0
-            elif self._mode == _MODE_RUN:
+            elif self._mode == LocomotionMode.RUN:
                 target_vel = 1.5 + 3.0 * mag
             else:
                 target_vel = mag
