@@ -47,7 +47,7 @@ launch.sh
 # AI models
 *.pt
 *.onnx
-src/providers/gearsonic/models/
+src/pipeline/gearsonic/models/
 
 # Logs
 logs/

@@ -21,7 +21,7 @@ from typing import Optional
 import numpy as np
 from scipy.spatial.transform import Rotation as sRot
 
-from ..pico_vr.reader import PicoVRBodyPose
+from src.pipeline.pico_vr.reader import PicoVRBodyPose
 from .obs_base import ObsBuilderBase
 
 logger = logging.getLogger(__name__)
