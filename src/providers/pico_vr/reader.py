@@ -69,8 +69,8 @@ class PicoVRReader:
 
         self._lock = threading.Lock()
         self._latest_body_pose: Optional[PicoVRBodyPose] = None
-        self._latest_body_pose_pose: Optional[PicoVRPose] = None
-        self._latest_body_pose_controller: Optional[PicoVRController] = None
+        self._latest_pose: Optional[PicoVRPose] = None
+        self._latest_controller: Optional[PicoVRController] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -128,12 +128,12 @@ class PicoVRReader:
     @property
     def pose(self) -> Optional[PicoVRPose]:
         with self._lock:
-            return self._latest_body_pose_pose
+            return self._latest_pose
 
     @property
     def controller(self) -> Optional[PicoVRController]:
         with self._lock:
-            return self._latest_body_pose_controller
+            return self._latest_controller
 
     @property
     def connected(self) -> bool:
@@ -197,8 +197,8 @@ class PicoVRReader:
                 )
                 with self._lock:
                     self._latest_body_pose = body_pose
-                    self._latest_body_pose_pose = pose
-                    self._latest_body_pose_controller = controller
+                    self._latest_pose = pose
+                    self._latest_controller = controller
                     self._connected = True
                 self._last_new_data_mono = now_mono
 
@@ -216,5 +216,5 @@ class PicoVRReader:
                     )
                 self._connected = False
                 self._latest_body_pose = None
-                self._latest_body_pose_pose = None
-                self._latest_body_pose_controller = None
+                self._latest_pose = None
+                self._latest_controller = None
