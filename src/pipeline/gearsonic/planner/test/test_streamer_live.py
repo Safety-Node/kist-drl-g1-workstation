@@ -17,13 +17,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../../.."))
 
 from src.boot_manager.service_manager import ServiceManager
 from src.pipeline.pico_vr.reader import PicoVRReader
-from src.pipeline.gearsonic.planner.streamer import PlannerStreamer
+from src.pipeline.gearsonic.planner.streamer import LocomotionMode, PlannerCommand, PlannerStreamer
 from src.providers.nav_types import NavVelCmd
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
 DUMMY_NAV = NavVelCmd(vx=0.3, vy=0.0, vyaw=0.2)
+PRINT_HZ  = 10
+
+
+def _fmt(cmd: PlannerCommand, mode: Optional[int]) -> str:
+    mode_str = f"{mode:+d}" if mode is not None else " ?"
+    return (
+        f"input={mode_str}  "
+        f"mode={cmd.mode:2d}({LocomotionMode(cmd.mode).name:<16})  "
+        f"vel={cmd.target_vel:6.3f}  "
+        f"move=[{cmd.movement_direction[0]:6.3f}, {cmd.movement_direction[1]:6.3f}]  "
+        f"face=[{cmd.facing_direction[0]:6.3f}, {cmd.facing_direction[1]:6.3f}]"
+    )
 
 
 class _MockNav:
@@ -127,6 +139,15 @@ def main() -> None:
             print(f"  {PASS if ok else FAIL}  {name}")
         passed = sum(results.values())
         print(f"\n{passed}/{len(results)} passed")
+
+        if passed == len(results):
+            print("\nLive (Ctrl+C to exit)")
+            while True:
+                cmd  = streamer.command
+                mode = streamer.input_mode
+                if cmd is not None:
+                    print(f"\r  {_fmt(cmd, mode)}", end="", flush=True)
+                time.sleep(1.0 / PRINT_HZ)
 
     except KeyboardInterrupt:
         pass
