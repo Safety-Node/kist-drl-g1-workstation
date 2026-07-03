@@ -10,6 +10,7 @@ from typing import Optional
 import numpy as np
 import yaml
 
+from src.providers.navigation_provider import NavVelCmd
 from src.providers.pico_vr.reader import PicoVRController, PicoVRReader
 from src.providers.singleton import singleton
 
@@ -21,9 +22,10 @@ _CONFIG_PATH = Path(__file__).parent / "streamer_config.yaml"
 def _load_config() -> dict:
     raw = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
     return {
-        "joystick_deadzone": raw["streamer"]["joystick_deadzone"],
-        "yaw_speed":         raw["streamer"]["yaw_speed"],
-        "dt":                raw["streamer"]["dt"],
+        "joystick_deadzone":          raw["streamer"]["joystick_deadzone"],
+        "yaw_speed":                  raw["streamer"]["yaw_speed"],
+        "dt":                         raw["streamer"]["dt"],
+        "controller_max_delta_speed": raw["streamer"]["controller_max_delta_speed"],
     }
 
 
@@ -68,8 +70,8 @@ class _YawAccumulator:
     def reset(self) -> None:
         self._yaw = 0.0
 
-    def update(self, rx: float, dt: float) -> np.ndarray:
-        self._yaw += rx * self._yaw_speed * dt
+    def update(self, rx: float, dt: float, nav_vyaw: float = 0.0) -> np.ndarray:
+        self._yaw += (rx * self._yaw_speed + nav_vyaw) * dt
         return np.array([math.cos(self._yaw), math.sin(self._yaw)], dtype=np.float32)
 
 
@@ -83,7 +85,7 @@ class PlannerStreamer:
 
         self._lock = threading.Lock()
         self._latest_command: Optional[PlannerCommand] = None
-
+        self._nav_cmd: Optional[NavVelCmd] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -126,6 +128,10 @@ class PlannerStreamer:
         with self._lock:
             return self._latest_command
 
+    def update_nav(self, nav: Optional[NavVelCmd]) -> None:
+        with self._lock:
+            self._nav_cmd = nav
+
     # ------------------------------------------------------------------
     # Background polling
     # ------------------------------------------------------------------
@@ -158,37 +164,57 @@ class PlannerStreamer:
         lx, ly = controller.left_joystick
         rx, _  = controller.right_joystick
 
-        # --- facing direction ---
-        facing = self._yaw.update(rx, self._config["dt"])  # (2,) unit vector
+        with self._lock:
+            nav = self._nav_cmd
 
-        # --- movement direction + speed ---
-        raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
-        if raw_mag < self._config["joystick_deadzone"]:
-            mag = 0.0
-            target_vel = -1.0
-            mode_to_send = LocomotionMode.IDLE
-        else:
-            mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
-            mode_to_send = self._mode
-            if self._mode == LocomotionMode.SLOW_WALK:
-                target_vel = 0.1 + 0.5 * mag
-            elif self._mode == LocomotionMode.WALK:
+        dt  = self._config["dt"]
+
+        if nav is not None:
+            # --- nav + controller blending ---
+            delta = self._config["controller_max_delta_speed"]
+            vx = nav.vx + (-lx * delta)
+            vy = nav.vy + ( ly * delta)
+
+            facing = self._yaw.update(rx, dt, nav_vyaw=nav.vyaw)
+
+            speed = float(math.hypot(vx, vy))
+            if speed < 1e-3:
+                movement_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
                 target_vel = -1.0
-            elif self._mode == LocomotionMode.RUN:
-                target_vel = 1.5 + 3.0 * mag
+                mode_to_send = LocomotionMode.IDLE
             else:
-                target_vel = mag
+                movement_direction = np.array([vx / speed, vy / speed, 0.0], dtype=np.float32)
+                target_vel = speed
+                mode_to_send = self._mode
+        else:
+            # --- controller only ---
+            facing = self._yaw.update(rx, dt)
 
-        scale = mag / raw_mag if raw_mag > 0.0 else 0.0
-        movement_local = np.array([-lx, ly], dtype=np.float32) * scale
+            raw_mag = float(np.clip(math.hypot(lx, ly), 0.0, 1.0))
+            if raw_mag < self._config["joystick_deadzone"]:
+                mag = 0.0
+                target_vel = -1.0
+                mode_to_send = LocomotionMode.IDLE
+            else:
+                mag = (raw_mag - self._config["joystick_deadzone"]) / (1.0 - self._config["joystick_deadzone"])
+                mode_to_send = self._mode
+                if self._mode == LocomotionMode.SLOW_WALK:
+                    target_vel = 0.1 + 0.5 * mag
+                elif self._mode == LocomotionMode.WALK:
+                    target_vel = -1.0
+                elif self._mode == LocomotionMode.RUN:
+                    target_vel = 1.5 + 3.0 * mag
+                else:
+                    target_vel = mag
 
-        # rotate movement from local (facing) frame to global frame
-        perp = np.array([-facing[1], facing[0]], dtype=np.float32)
-        rotation = np.stack([perp, facing], axis=1)   # (2, 2)
-        movement_xy = rotation @ movement_local        # (2,)
+            scale = mag / raw_mag if raw_mag > 0.0 else 0.0
+            movement_local = np.array([-lx, ly], dtype=np.float32) * scale
+            perp = np.array([-facing[1], facing[0]], dtype=np.float32)
+            rotation = np.stack([perp, facing], axis=1)
+            movement_xy = rotation @ movement_local
+            movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
 
-        movement_direction = np.array([movement_xy[0], movement_xy[1], 0.0], dtype=np.float32)
-        facing_direction   = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
+        facing_direction = np.array([facing[0], facing[1], 0.0], dtype=np.float32)
 
         return PlannerCommand(
             mode=mode_to_send,
