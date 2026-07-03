@@ -101,6 +101,7 @@ class PicoVRReader:
             os.dup2(devnull.fileno(), 2)
             try:
                 xrt.init()
+                time.sleep(1.0)
             finally:
                 os.dup2(fd_out, 1)
                 os.dup2(fd_err, 2)
