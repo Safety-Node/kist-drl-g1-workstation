@@ -1,8 +1,9 @@
 name: CI
 
 # Minimal build CI for the PC repo. Builds ONLY the g1_onboard_msgs interface
-# package (the rest of the OM1 app is Python and not built here). This is the
-# foundation for the PC-side wire-contract check against interface_manifest.yaml.
+# package (the rest of the OM1 app is Python and not built here). Catches
+# message-package build breakage: a malformed .msg, a broken package.xml/
+# CMakeLists, or a submodule bump to a version that doesn't compile.
 on:
   push:
     branches: [main]
@@ -55,9 +56,5 @@ jobs:
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
           source ros2_ws/install/setup.bash
+          # Fail if the build "succeeded" but produced no usable typesupport.
           ros2 interface list | grep g1_onboard_msgs
-
-      # Foundation for the PC-side wire-contract test:
-      #   assert UnitreeG1Provider's publishers/subscribers (topic,type,qos) match
-      #   ros2_ws/src/g1_onboard_msgs/interface_manifest.yaml. Requires a provider
-      #   introspection harness — added in a follow-up.
