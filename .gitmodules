@@ -7,3 +7,6 @@
 [submodule "third_party/route_planner"]
 	path = third_party/route_planner
 	url = https://github.com/hanyu462/route-planner.git
+[submodule "ros2_ws/src/g1_onboard_msgs"]
+	path = ros2_ws/src/g1_onboard_msgs
+	url = git@github.com:Safety-Node/kist-drl-g1-msgs.git
