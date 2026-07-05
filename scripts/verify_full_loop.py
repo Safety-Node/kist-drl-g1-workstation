@@ -13,7 +13,6 @@ verify_tts_live 와 달리, 이 스크립트는 run.py 와 동일한 **정식 �
     T3  TTS synthesize 진입        (probe: synthesize wrapper)
     T4  PCM publish(audio_out)     (probe: publish_audio_out wrapper)
     T5  speaker playing=True       (probe: g1.speaker_state 폴링, --local 시 T4=T5)
-구간 의미는 docs/VERIFY_FULL_LOOP_TIMING.md 다이어그램 참조.
 
 probe 는 전부 "원본 호출을 그대로 통과시키는 측정 래퍼" — 동작 변경 없음.
 
