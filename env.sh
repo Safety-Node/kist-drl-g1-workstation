@@ -9,6 +9,13 @@ _env_sh_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 _ros_setup="/opt/ros/humble/setup.bash"
 _cyclonedds_xml="${_env_sh_dir}/cyclonedds/cyclonedds.xml"
 
+# Ensure the shared g1_onboard_msgs submodule is present before building/sourcing.
+# A submodule is a pinned pointer; a fresh clone (or a pin bump) leaves its dir
+# empty until inited. Targeted to g1_onboard_msgs only — third_party/route_planner
+# is a separate nested workspace, initialised on its own. Non-fatal (env.sh is sourced).
+git -C "${_env_sh_dir}" submodule update --init ros2_ws/src/g1_onboard_msgs 2>/dev/null \
+  || echo "[env.sh] WARN: could not init g1_onboard_msgs submodule — run: git submodule update --init ros2_ws/src/g1_onboard_msgs" >&2
+
 if [[ ! -f "${_ros_setup}" ]]; then
   echo "ROS 2 Humble setup not found at ${_ros_setup}" >&2
   return 1

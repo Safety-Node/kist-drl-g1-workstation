@@ -1,0 +1,60 @@
+name: CI
+
+# Minimal build CI for the PC repo. Builds ONLY the g1_onboard_msgs interface
+# package (the rest of the OM1 app is Python and not built here). Catches
+# message-package build breakage: a malformed .msg, a broken package.xml/
+# CMakeLists, or a submodule bump to a version that doesn't compile.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-msgs:
+    name: build g1_onboard_msgs (${{ matrix.ros_distro }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ros_distro: [humble]
+    container:
+      image: ros:${{ matrix.ros_distro }}-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tooling
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git python3-colcon-common-extensions python3-rosdep
+          rosdep init || true
+          rosdep update
+
+      # Only the msgs submodule is needed here. Do NOT use submodules:recursive —
+      # it would also try to fetch third_party/route_planner (external account),
+      # which CI may not have access to. No-op while g1_onboard_msgs is still a
+      # local copy on main; clones it once the submodule PR merges.
+      - name: Init g1_onboard_msgs submodule
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git submodule update --init ros2_ws/src/g1_onboard_msgs || true
+
+      - name: Build g1_onboard_msgs
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          cd ros2_ws
+          rosdep install --from-paths src/g1_onboard_msgs --ignore-src -r -y || true
+          colcon build --packages-select g1_onboard_msgs
+
+      - name: Interface sanity
+        shell: bash
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          source ros2_ws/install/setup.bash
+          # Fail if the build "succeeded" but produced no usable typesupport.
+          ros2 interface list | grep g1_onboard_msgs
