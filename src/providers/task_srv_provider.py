@@ -48,6 +48,10 @@ from actions.speak.interface import SpeakInput
 from providers.singleton import singleton
 from providers.unitree_g1_provider import UnitreeG1Provider
 
+# NavigationProvider is imported lazily inside TaskSrvProvider — it loads
+# locations.json5 on construction, which isn't always available in scaffolds.
+# A scenario only pays that cost if it actually uses the `nav_state` criterion.
+
 
 # ===========================================================================
 # Template / reference resolution — replaces lambdas (JSON5 can't hold them).
@@ -117,6 +121,8 @@ class TickContext:
     transcripts: T.List[str]          # received since this sub-task started
     blackboard: ScenarioContext
     elapsed: float                    # seconds since on_start dispatch
+    nav_state: T.Any = None           # NavigationProvider.get_state() snapshot
+    dispatch_ts: float = 0.0          # time.monotonic() at on_start dispatch
 
 
 # ===========================================================================
@@ -260,6 +266,39 @@ class Delay(Criterion):
 
     def evaluate(self, tc: TickContext) -> bool:
         return tc.elapsed >= self.seconds
+
+
+# Valid NavigationState.mode values (mirrors NavigationState.mode in
+# navigation_provider.py). Used to reject typos at scenario load time.
+_NAV_MODES: T.FrozenSet[str] = frozenset({
+    "IDLE", "NAVIGATING", "ALIGNING", "ARRIVED", "ESTOP", "WAITING_POSE", "PLANNING",
+})
+
+
+@dataclass
+class NavState(Criterion):
+    """Navigation: NavigationProvider's current mode matches ``mode``.
+
+    Modes mirror ``NavigationState.mode``: IDLE / NAVIGATING / ALIGNING /
+    ARRIVED / ESTOP / WAITING_POSE / PLANNING.
+
+    Stale states from a previous sub-task are ignored — the state's
+    ``t_monotonic`` must be at or after this sub-task's dispatch time, so a
+    leftover "ARRIVED" from the prior leg cannot satisfy the next ``ARRIVED``
+    wait.
+    """
+
+    mode: str = "ARRIVED"
+    timeout_s: float = 30.0
+
+    def evaluate(self, tc: TickContext) -> bool:
+        ns = tc.nav_state
+        if ns is None or getattr(ns, "mode", None) != self.mode:
+            return False
+        ns_ts = getattr(ns, "t_monotonic", None)
+        if ns_ts is None:
+            return False
+        return float(ns_ts) >= tc.dispatch_ts
 
 
 def _get(obj: T.Any, name: str) -> T.Optional[float]:
@@ -527,7 +566,19 @@ _CRITERION_BUILDERS: T.Dict[str, T.Callable[[T.Mapping], Criterion]] = {
     ),
     "always": lambda n: Always(timeout_s=float(n.get("timeout_s", 3600.0))),
     "delay": lambda n: Delay(seconds=float(_req(n, "seconds", "delay")), timeout_s=float(n.get("timeout_s", 3600.0))),
+    "nav_state": lambda n: NavState(
+        mode=_validate_nav_mode(_req_str(_req(n, "mode", "nav_state"), "mode")),
+        timeout_s=float(n.get("timeout_s", 30.0)),
+    ),
 }
+
+
+def _validate_nav_mode(mode: str) -> str:
+    if mode not in _NAV_MODES:
+        raise ScenarioConfigError(
+            f"nav_state.mode {mode!r} is not one of {sorted(_NAV_MODES)}"
+        )
+    return mode
 
 
 def _req_list(n: T.Mapping, key: str, where: str) -> T.List:
@@ -649,6 +700,12 @@ class TaskSrvProvider:
         self._active_transcripts: T.List[str] = []
 
         self._unitree_g1 = UnitreeG1Provider()          # @singleton — sensor caches
+        # NavigationProvider is lazy: only constructed the first time
+        # a scenario's nav_state criterion is evaluated. Sentinel values:
+        #   None  → not yet attempted
+        #   False → tried and failed; don't retry on every tick
+        #   else  → working singleton
+        self._nav_provider: T.Any = None
         self._move_connector: T.Optional[T.Any] = None
         self._speak_connector: T.Optional[T.Any] = None
         self._hub = ConnectorHub()
@@ -691,6 +748,32 @@ class TaskSrvProvider:
         self._reset_active()
         self._state = TaskState.IDLE
         self._running = False
+
+    def _get_nav_state(self) -> T.Any:
+        """Lazy-init NavigationProvider (@singleton) and return its current state,
+        or None if it can't be constructed (no locations.json5, etc.).
+        First failure is sticky — we set the sentinel to False so we don't pay
+        the import/construction cost on every tick.
+        """
+        if self._nav_provider is False:
+            return None
+        if self._nav_provider is None:
+            try:
+                from providers.navigation_provider import NavigationProvider
+                self._nav_provider = NavigationProvider()
+            except Exception:
+                logging.warning(
+                    "TaskSrvProvider: NavigationProvider unavailable; "
+                    "'nav_state' criterion will always evaluate False",
+                    exc_info=True,
+                )
+                self._nav_provider = False
+                return None
+        try:
+            return self._nav_provider.get_state()
+        except Exception:
+            logging.exception("TaskSrvProvider: NavigationProvider.get_state() raised")
+            return None
 
     # -- main loop (owned here; TaskSrvBg just calls this) -----------------
     def run(self, stop_event) -> None:
@@ -804,6 +887,8 @@ class TaskSrvProvider:
             transcripts=self._active_transcripts,
             blackboard=self._blackboard,
             elapsed=time.monotonic() - self._dispatch_ts,
+            nav_state=self._get_nav_state(),
+            dispatch_ts=self._dispatch_ts,
         )
         try:
             done = st.success.evaluate(tc)
